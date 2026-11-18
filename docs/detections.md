@@ -54,7 +54,7 @@ detections:
 ## 参照できるフィールド
 | フィールド | 内容 |
 |---|---|
-| `network.kind` / `direction` / `transport` / `scope` | 種別（connect / accept / listen / raw_socket / beacon_report / dns_integrity / bytes_report / persistence）、方向、tcp / udp / raw / packet / dns、loopback / lan / internet / all |
+| `network.kind` / `direction` / `transport` / `scope` | 種別（connect / accept / listen / raw_socket / beacon_report / dns_integrity / bytes_report / persistence / inspect）、方向、tcp / udp / raw / packet / dns、loopback / lan / internet / all |
 | `process.executable` / `name` / `args` / `user` / `uid` | 実行ファイル、引数、ユーザー |
 | `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / adhoc / unsigned / package / unmanaged / unknown |
 | `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
@@ -75,6 +75,8 @@ detections:
 | `kanmon.beacon.score` / `n` / `median_interval_s` / `mad_s` | ビーコン（`beacon_report` のみ） |
 | `kanmon.bytes.out` / `window_s` | 1 つの宛先へ窓（既定 10 分）の間に送ったバイト数（`bytes_report` のみ） |
 | `kanmon.persist.kind` / `change` / `detail` / `risky` | 居座りの種類（claude_hook / vscode_folderopen / pth_exec / workflow / git_hook / autostart / rc_pipe）、added / changed / removed、中身の要約、怪しい特徴（network / pipe_shell / inline_code / base64 / tmp_path。workflow は secrets_dump / secrets_send / oidc_token）（`persistence` のみ） |
+| `package.name` / `version` / `type` | 調べたパッケージ（`inspect` のみ。type は pypi / npm） |
+| `kanmon.inspect.features` / `count` / `base_version` | 差分から拾った特徴の一覧（[docs/inspect.md](inspect.md)）、所見の件数、比較した版（`inspect` のみ） |
 | `kanmon.persist.module` | `.pth` が最初に読み込むモジュールのトップレベル名（`persistence` の pth_exec のみ） |
 | `kanmon.persist_recent` | 直近（既定 24 時間）に、起動のたびに動く仕掛けが追加・変更された種類（pth_exec・claude_hook・vscode_folderopen・git_hook・rc_pipe・autostart）。通信のイベント（`connect`）に付く |
 | `kanmon.bytes.open_paths` / `open_exts` / `open_size` / `out_per_open` | 報告の瞬間に開いていた通常ファイルのパス・拡張子・合計容量、送信量 ÷ 合計容量 |
@@ -167,5 +169,8 @@ detections:
 結び付ける期間は `[persistence] recent_window_s`（既定 24 時間）。Python 環境やプロジェクトの単位では結び付けず、種類の単位で見る（venv の python は実体の実行ファイルに解決されるため）。
 
 監視リスト（`dns.watch_domains`）の既定値は、パッケージ配布元（npm・PyPI・crates.io 等）、GitHub、Hugging Face、AI ベンダーの API、主要なログイン画面です。
+
+### パッケージの更新の検査（`70-inspect.yaml`）
+イベントの `network.kind` は `inspect`。`kanmonctl inspect` が作り、特徴（I1〜I20）と組み合わせ（IC1〜IC4）で点数を付ける。一覧と点数は [docs/inspect.md](inspect.md)。
 
 検知ルールを変えたら、`tests/fixtures/replay-cases.jsonl` に期待値を足してください。`cargo test` が回帰を検出します。

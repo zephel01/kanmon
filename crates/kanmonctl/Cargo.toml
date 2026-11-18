@@ -1,6 +1,6 @@
 [package]
 name = "kanmonctl"
-description = "kanmon CLI：検知ルールの検証・過去ログ再生・イベント表示・ビーコン一覧"
+description = "kanmon CLI：検知ルールの検証・過去ログ再生・イベント表示・ビーコン一覧・パッケージの更新差分の検査"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,3 +12,14 @@ anyhow.workspace = true
 serde_json.workspace = true
 clap.workspace = true
 chrono.workspace = true
+serde.workspace = true
+ureq.workspace = true
+sha2.workspace = true
+base64.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true
+# inspect の取得：OS の証明書（社内の TLS 検査等）も信頼する。検証は外さない
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+rustls-native-certs = "0.8"

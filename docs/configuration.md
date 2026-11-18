@@ -73,6 +73,7 @@ Linux は `sudo packaging/install-linux.sh`。どちらも、動いている古�
 | `kanmonctl beacon --min 0.5` | ビーコン（周期的な通信）の候補 |
 | `kanmonctl check --detections DIR [--extra FILE]` | 検知ルールの検証 |
 | `kanmonctl replay --events FILE --detections DIR [--only ID]` | 過去ログに検知ルールを当て直す |
+| `kanmonctl inspect <pypi:名前==版 \| npm:名前@版> --detections DIR [--base 版] [--json] [--all]` / `kanmonctl inspect --file F [--base-file F] [--eco pypi\|npm] --detections DIR` | パッケージの更新差分を調べて点数を付ける（[docs/inspect.md](inspect.md)）。コードは実行も展開もしない。終了コード 0 / 2（warn）/ 3（critical）/ 1（エラー）。`sudo` 不要 |
 | `kanmonctl scan [--root DIR] [--system] [--risky] [--kind KIND] [--json]` | 居座りの走査（Claude Code のフック、VS Code の folderOpen、`.pth`、Git のフック、自動起動等）。読むだけ。既定は `~/kanmon-work`。`--kind pth_exec` で Python の起動のたびに動く `.pth` の import 行だけを、システムの Python も含めて一覧にする（読み込むモジュール名つき）。`sudo` 不要 |
 
 ログは root 専用なので、通常は `sudo` を付けて実行します。netmon 時代のログ（`netmon.*` 欄）も自動で読み替えます。

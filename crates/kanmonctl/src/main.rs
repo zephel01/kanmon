@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+mod inspect;
+
 #[derive(Parser)]
 #[command(version, about = "kanmon CLI")]
 struct Cli {
@@ -108,6 +110,31 @@ enum Cmd {
         json: bool,
         #[arg(long, default_value_t = 6)]
         max_depth: usize,
+    },
+    /// パッケージ（PyPI・npm）の更新差分を調べ、盗む処理によく出る特徴に点数を付ける。
+    /// コードは実行も展開もしない。終了コード：0 = warn 未満、2 = warn、3 = critical、1 = エラー
+    Inspect {
+        /// `pypi:名前==版` / `npm:名前@版`（版を省くと最新版）。比較相手は自動で 1 つ前の版
+        spec: Option<String>,
+        /// 比較する版（省略時は、対象より前に公開された最新の版）
+        #[arg(long)]
+        base: Option<String>,
+        /// 手元のアーカイブ（.whl・.tar.gz・.tgz）を調べる。ネットワークを使わない
+        #[arg(long, conflicts_with = "spec")]
+        file: Option<PathBuf>,
+        /// --file の比較相手
+        #[arg(long, requires = "file")]
+        base_file: Option<PathBuf>,
+        /// --file の形式（pypi / npm）。.whl・.tgz は自動
+        #[arg(long)]
+        eco: Option<String>,
+        #[arg(long)]
+        detections: PathBuf,
+        #[arg(long)]
+        json: bool,
+        /// 所見をすべて表示する（既定は特徴ごとに 3 件まで）
+        #[arg(long)]
+        all: bool,
     },
     /// 直近のレベル別件数とスコア上位
     Status {
@@ -411,6 +438,12 @@ fn main() -> Result<()> {
                 "\n合計 {} 件（怪しい特徴あり {n} 件）。kanmon は読むだけで、実行・変更はしていません",
                 items.len()
             );
+        }
+        Cmd::Inspect { spec, base, file, base_file, eco, detections, json, all } => {
+            let code = inspect::run(inspect::Args { spec, base, file, base_file, eco, detections, json, all })?;
+            if code != 0 {
+                std::process::exit(code);
+            }
         }
         Cmd::Status { db, hours } => {
             let st = Store::open_readonly(&db)?;

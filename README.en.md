@@ -30,7 +30,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 </p>
 
 > [!NOTE]
-> The current release (v0.2) **observes and alerts only**. It does not block yet; blocking is the next milestone.
+> The current release (v0.3) **observes and alerts only**. It does not block yet; blocking is the next milestone.
 > Documentation beyond this page is currently in Japanese.
 
 ## Features
@@ -38,6 +38,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 - 🧩 **Rules as YAML**: write a rule, back-test it on past logs with `kanmonctl replay`, then drop it in place. The daemon hot-reloads it within 5 seconds
 - 💬 **Alerts that explain themselves**: reasons, points, process and destination in full. Warnings and above stay on screen until you dismiss them
 - 🪤 **Persistence watch**: flags new or changed Claude Code hooks, VS Code folder-open tasks, `.pth` files, Git hooks, launch agents and similar dev-tool persistence (read-only)
+- 🔬 **Package update inspection**: `kanmonctl inspect pypi:name==version` diffs a release against the previous one and looks for what stealers tend to add (`.pth` startup hooks, install scripts, environment harvesting, credential paths, hidden URLs, blockchain RPC endpoints, …). Nothing is executed or unpacked to disk
 - 📦 **Upload volume**: judges how much was sent together with the files the process has open (`.env`, `.git` objects, GGUF, …) and the destination, so a model upload is told apart from exfiltration
 - 📡 **Beacon detection**: statistical periodicity scoring catches C2 check-ins, including ones relayed through legitimate cloud services
 - 🛡️ **Threat intel**: matches against Feodo Tracker, Spamhaus DROP and your own blocklists
@@ -94,7 +95,22 @@ detections:
         - { field: process.parent_chain, op: in, value: [npm, pip, pip3, uv, cargo] }
         - { field: process.name, op: in, value: [sh, bash, curl, wget] }
 ```
-61 rules ship by default: general techniques (S1–S18), developer-targeted ones (D1–D11: remote-access tools, tunnels, exposed dev servers, network activity during package installs, exfiltration-friendly services, AI CLIs talking to unofficial endpoints, and more) and DNS tampering (N1–N6: hosts file edits, resolver changes, DoH cross-check, and more) upload volume (V1–V9) and persistence (P1–P7). The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
+93 rules ship by default: general techniques (S1–S18), developer-targeted ones (D1–D12: remote-access tools, tunnels, exposed dev servers, network activity during package installs, exfiltration-friendly services, AI CLIs talking to unofficial endpoints, blockchain RPC endpoints, and more), DNS tampering (N1–N6: hosts file edits, resolver changes, DoH cross-check, and more), upload volume (V1–V9), persistence (P1–P7, PW), persistence-then-send correlation (C1, C2) and package update inspection (I1–I20, IC1–IC4). The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
+
+## Check Python startup hooks (.pth)
+As the November 2026 agent-framework compromise on PyPI showed, a single line in a `.pth` file runs code every time Python starts. List the ones on your machine (read-only):
+```bash
+kanmonctl scan --root ~/works --kind pth_exec
+```
+If `[読み込み: …]` (the module it imports) shows a name you don't recognize, check which package installed that `.pth` (`pip show -f <name>`). `_virtualenv`, `_distutils_hack` and `__editable__` are common and expected.
+
+## Inspect a package update before installing it
+```bash
+kanmonctl inspect pypi:agent-framework==1.26.2 --detections /usr/local/etc/kanmon/detections
+kanmonctl inspect npm:keyv@6.0.0 --detections /usr/local/etc/kanmon/detections
+kanmonctl inspect --file ./pkg-1.1.whl --base-file ./pkg-1.0.whl --detections …   # local files, no network
+```
+It downloads the given version and the previous one from the registry (PyPI or npm), verifies their hashes, and reads only what was added. Exit code is 2 for warn and 3 for critical, so it can gate CI or an update. A single trait scores low; combinations such as "runs automatically + sends somewhere" score high. Details (Japanese): [docs/inspect.md](docs/inspect.md).
 
 ## Roadmap
 - [x] **v0.1** Monitoring, detection and alerts on both OSes; YAML rules, replay, beacon scoring, threat intel
