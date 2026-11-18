@@ -1,0 +1,27 @@
+# 追加例：「新しい事象」への対応サンプル。
+# AI コーディング CLI が公式以外の API へ通信する（非公式 API プロキシ＝中転站の利用や、
+# 設定を書き換えられて別の宛先へ送られている疑い）。
+# ※ destination.registered_domain が必要なので、DNS 対応（ロードマップ P3）以降に効く。replay では今すぐ試せる。
+#
+# 使い方：
+#   1) kanmonctl check --detections ./detections --extra examples/detections/60-ai-cli-endpoint.yaml
+#   2) kanmonctl replay --events /var/log/kanmon/events.jsonl --detections ./detections \
+#        --extra examples/detections/60-ai-cli-endpoint.yaml --only X1     # 過去ログで誤検知を確認
+#   3) sudo install -o root -m 0644 examples/detections/60-ai-cli-endpoint.yaml /etc/kanmon/detections/
+#      （デーモンは 5 秒以内に自動で再読込）
+detections:
+  - id: X1
+    name: ai_cli_unofficial_endpoint
+    points: 30
+    description: AI コーディング CLI が公式以外の宛先へ通信（非公式 API プロキシの疑い）
+    kinds: [connect]
+    tags: [ai, exfiltration]
+    when:
+      all:
+        - { field: process.name, op: in, value: [claude, codex, gemini, grok, cursor-agent, aider, opencode, qwen, kimi], ci: true }
+        - { field: destination.registered_domain, op: exists }
+        - field: destination.registered_domain
+          op: not_in
+          ci: true
+          value: [anthropic.com, claude.ai, claude.com, openai.com, chatgpt.com, googleapis.com, google.com, x.ai,
+                  cursor.sh, cursor.com, github.com, githubusercontent.com, sentry.io, statsig.com, datadoghq.com]

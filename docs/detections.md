@@ -35,7 +35,7 @@ detections:
         - not: { field: process.code_signature.status, op: eq, value: apple }
 ```
 - `description` は通知と `kanmonctl alerts` にそのまま表示されます。
-- 演算子は次の 14 種類です：`eq` `ne` `in` `not_in` `prefix` `suffix` `contains` `regex` `gt` `gte` `lt` `lte` `exists` `missing`。
+- 演算子は次の 15 種類です：`eq` `ne` `in` `not_in` `prefix` `suffix` `contains` `regex` `cidr` `gt` `gte` `lt` `lte` `exists` `missing`。`cidr` は IP アドレスが範囲に含まれるかを判定します（例：`value: ["149.154.160.0/20"]`）。
 - `"@名前"` は `lists` の値に展開されます。`ci: true` を付けると大文字・小文字を区別しません。
 - フィールドが配列の場合は、どれか 1 つが一致すれば真になります。
 - `prefix` の値を `~/` で始めると、`/Users/*/`・`/home/*/`・`/root/` のいずれかに一致します。
@@ -59,7 +59,7 @@ detections:
 | `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / adhoc / unsigned / package / unmanaged / unknown |
 | `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
 | `process.hash.sha256` / `proc_key` | ハッシュ、安定識別キー |
-| `process.parent.name` / `parent_chain` | 親プロセス、親から上へ最大 6 段の実行ファイル名 |
+| `process.parent.name` / `parent_chain` | 親プロセス、親から上へ最大 6 段の実行ファイル名。インタプリタはスクリプト名も入る（`node …/npm-cli.js` → `node`・`npm-cli.js`、`python -m pip` → `pip`） |
 | `process.exe_deleted` / `memfd` / `hidden` / `interpreter` / `script` | 削除済み、メモリ上（memfd）、隠しファイル、インタプリタとスクリプト |
 | `process.file_age_s` / `first_seen_age_s` | 実行ファイルの更新からの秒数、kanmon が初めて見てからの秒数 |
 | `source.ip` / `port`、`destination.ip` / `port` / `domain` / `registered_domain` | 端点（v0.1 では `domain` は空） |
@@ -83,6 +83,18 @@ detections:
 | S14 | ブラウザ以外が DNS を迂回（DoH / DoT） | +15 |
 | S15 / S16 / S17 | 新しい待受を外部に公開 / インターネットから着信 / raw ソケット | +25 / +30 / +20 |
 | S18 | トンネル・動的 DNS 系ドメイン | +10 |
-| T-trusted | Apple 署名・公式パッケージ（curl・bash 等は除く） | −15 |
+| T-trusted | Apple 署名・公式パッケージ（curl・bash・ssh 等は除く） | −15 |
+
+### 開発者を狙う手口（`40-developer.yaml`）
+| ID | 内容 | 点 |
+|---|---|---|
+| D1 | 遠隔操作ソフト（AnyDesk・TeamViewer・RustDesk 等）が通信。サポート詐欺で悪用が多い | +40 |
+| D2 / D2s | トンネルツール（ngrok・cloudflared・chisel 等）/ SSH のリバーストンネル（`-R`） | +25 / +30 |
+| D3 / D3d | 開発・AI サーバー（LiteLLM・Ollama・Jupyter・DB 等）/ デバッガのポートを外部に公開 | +30 / +60 |
+| D4 / D4p | パッケージ導入処理（npm・pip・cargo・makepkg 等）の配下から外部へ通信 / 非標準ポートへ通信 | +30 / +20 |
+| D5 | スクリプト（node・python 等）がインターネットの非標準ポートへ通信 | +15 |
+| D6 | AppleScript（osascript）またはその配下が通信（AMOS 等の情報窃取） | +40 |
+| D7 | マイニングプールでよく使われるポートへ通信 | +30 |
+| D8 | Telegram 以外のプロセスが Telegram のサーバーへ通信（盗んだ情報の送り先） | +40 |
 
 検知ルールを変えたら、`tests/fixtures/replay-cases.jsonl` に期待値を足してください。`cargo test` が回帰を検出します。

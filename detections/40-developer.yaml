@@ -1,0 +1,149 @@
+# 開発者を狙う手口（P1）。出典はインシデント記事の分析（サプライチェーン攻撃・サポート詐欺・
+# 開発/AI サーバーの公開・情報窃取マルウェア）。誤検知が多ければ点数を下げるか rules.json で許可する。
+lists:
+  # 遠隔操作ソフト（サポート詐欺で悪用が多い。部分一致・大文字小文字を区別しない）
+  remote_access:
+    [anydesk, teamviewer, rustdesk, screenconnect, connectwise, ultraviewer, logmein, splashtop, todesk,
+     sunlogin, awesun, remoting_host, chrome-remote-desktop, dwagent, supremo, "quick assist"]
+  # トンネル・リバースプロキシ（内部を外へ公開できる）
+  tunnel_tools: [ngrok, cloudflared, chisel, frpc, frps, bore, zrok, tunnelmole, playit, inlets, gost, rathole]
+  # パッケージマネージャ（インタプリタ経由のものはスクリプト名でも一致する：npm-cli.js・pip 等）
+  pkg_managers:
+    [npm, npm-cli.js, npx, npx-cli.js, pnpm, pnpm.cjs, pnpm.js, yarn, yarn.js, yarn.cjs, bun, bunx, pip, pip3, pipx,
+     uv, uvx, poetry, pdm, gem, bundle, cargo, makepkg, paru, yay]
+  # インストール処理の配下で外へ出たら不審なもの
+  pkg_children: [sh, bash, zsh, dash, curl, wget, node, python, python3, perl, deno, bun, powershell, pwsh]
+  # 開発・AI 系サーバーの既定ポート（外部公開されると危険）
+  dev_ai_ports:
+    [4000, 11434, 8888, 7860, 8501, 6006, 1234, 8188, 5173, 3000, 8000, 8080, 6379, 5432, 3306, 27017, 9200,
+     2375, 2376, 10250]
+  # デバッガのポート（公開＝任意コード実行に近い）
+  debug_ports: [9229, 9222, 5678, 5005]
+  # マイニングプールでよく使われるポート
+  mining_ports: [3333, 5555, 7777, 14433, 14444, 45700]
+  # Telegram の公開 IP 範囲（https://core.telegram.org/resources/cidr.txt、2026-11 時点）
+  telegram_cidrs:
+    ["91.108.56.0/22", "91.108.4.0/22", "91.108.8.0/22", "91.108.16.0/22", "91.108.12.0/22", "149.154.160.0/20",
+     "91.105.192.0/23", "91.108.20.0/22", "185.76.151.0/24", "2001:b28:f23d::/48", "2001:b28:f23f::/48",
+     "2001:67c:4e8::/48", "2001:b28:f23c::/48", "2a0a:f280::/32"]
+  telegram_apps: [telegram, telegram-desktop, "telegram desktop", telegram lite]
+  scripting:
+    [node, bun, deno, python, python2, python3, ruby, perl, php, osascript, sh, bash, zsh, dash, pwsh, powershell]
+
+detections:
+  - id: D1
+    name: remote_access_tool
+    points: 40
+    description: 遠隔操作ソフトが通信（サポート詐欺で悪用が多い）
+    kinds: [connect, listen]
+    when: { field: process.name, op: contains, value: "@remote_access", ci: true }
+
+  - id: D2
+    name: tunnel_tool
+    points: 25
+    description: トンネルツールが通信（内部を外部へ公開できる）
+    kinds: [connect, listen]
+    when: { field: process.name, op: in, value: "@tunnel_tools", ci: true }
+
+  - id: D2s
+    name: ssh_reverse_tunnel
+    points: 30
+    description: SSH のリバーストンネル（-R）で外部から入口を作っている
+    kinds: [connect]
+    when:
+      all:
+        - { field: process.name, op: eq, value: ssh }
+        - { field: process.args, op: regex, value: "^-[A-Za-z]*R" }
+
+  - id: D3
+    name: dev_server_exposed
+    points: 30
+    description: 開発・AI 系サーバーがループバック以外で待受（外部から操作される恐れ）
+    kinds: [listen]
+    when:
+      all:
+        - { field: network.scope, op: ne, value: loopback }
+        - { field: source.port, op: in, value: "@dev_ai_ports" }
+
+  - id: D3d
+    name: debug_port_exposed
+    points: 60
+    description: デバッガのポートがループバック以外で待受（任意コード実行に近い）
+    kinds: [listen]
+    when:
+      all:
+        - { field: network.scope, op: ne, value: loopback }
+        - { field: source.port, op: in, value: "@debug_ports" }
+        - any:
+            - { field: process.name, op: in, value: [node, python, python3, java, chrome, chromium, "google chrome", ruby, dlv], ci: true }
+            - { field: process.interpreter, op: eq, value: true }
+
+  - id: D4
+    name: pkg_install_script_network
+    points: 30
+    description: パッケージ導入処理の配下でシェル・スクリプトが外部へ通信（インストール時の情報窃取の典型）
+    kinds: [connect]
+    when:
+      all:
+        - { field: network.scope, op: eq, value: internet }
+        - { field: process.parent_chain, op: in, value: "@pkg_managers", ci: true }
+        - any:
+            - { field: process.name, op: in, value: "@pkg_children", ci: true }
+            # python3.12 等の版付きの名前もインタプリタとして識別される
+            - { field: process.interpreter, op: eq, value: true }
+
+  - id: D4p
+    name: pkg_install_nonstandard_port
+    points: 20
+    description: パッケージ導入処理の配下から非標準ポートへ通信（レジストリは 443 / 80 のみ）
+    kinds: [connect]
+    when:
+      all:
+        - { field: network.scope, op: eq, value: internet }
+        - { field: process.parent_chain, op: in, value: "@pkg_managers", ci: true }
+        - { field: destination.port, op: not_in, value: [443, 80, 53, 853] }
+
+  - id: D5
+    name: script_to_nonstandard_port
+    points: 15
+    description: スクリプト（node・python 等）がインターネットの非標準ポートへ通信
+    kinds: [connect]
+    when:
+      all:
+        - { field: network.scope, op: eq, value: internet }
+        - any:
+            - { field: process.name, op: in, value: "@scripting", ci: true }
+            - { field: process.interpreter, op: eq, value: true }
+        - { field: destination.port, op: not_in, value: [80, 443, 53, 853, 22, 123, 993, 587, 465] }
+
+  - id: D6
+    name: osascript_network
+    points: 40
+    description: AppleScript（osascript）が通信（AMOS 等の情報窃取で使われる）
+    kinds: [connect]
+    when:
+      any:
+        - { field: process.name, op: eq, value: osascript }
+        - all:
+            - { field: process.parent_chain, op: in, value: [osascript] }
+            - { field: process.name, op: in, value: "@pkg_children" }
+
+  - id: D7
+    name: mining_pool_port
+    points: 30
+    description: マイニングプールでよく使われるポートへ通信
+    kinds: [connect]
+    when:
+      all:
+        - { field: network.scope, op: eq, value: internet }
+        - { field: destination.port, op: in, value: "@mining_ports" }
+
+  - id: D8
+    name: telegram_api_non_telegram
+    points: 40
+    description: Telegram 以外のプロセスが Telegram のサーバーへ通信（盗んだ情報の送り先に使われる）
+    kinds: [connect]
+    when:
+      all:
+        - { field: destination.ip, op: cidr, value: "@telegram_cidrs" }
+        - { field: process.name, op: not_in, value: "@telegram_apps", ci: true }

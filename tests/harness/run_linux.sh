@@ -79,6 +79,18 @@ echo "[D] raw ソケット（S17）"
 python3 -c "import socket,time; s=socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP); time.sleep(1.5)" \
   || echo "  (raw socket を作れない環境)"
 
+echo "[G] 開発サーバーを 0.0.0.0:8888 で公開（D3）"
+python3 -m http.server 8888 --bind 0.0.0.0 >/dev/null 2>&1 &
+P=$!; sleep 1.5; kill $P
+
+echo "[H] パッケージマネージャ（npm を名乗るスクリプト）配下の python が外へ（D4）"
+cat > "$W/npm" <<'SH'
+#!/bin/bash
+# インストールスクリプトが外へ接続する想定（接続を 1.5 秒保持して、収集間隔より長くする）
+python3 -c "import socket,time; s=socket.create_connection(('203.0.113.50',443),3); time.sleep(1.5)" || true
+SH
+chmod +x "$W/npm"; "$W/npm"
+
 echo "[E] 疑似ビーコン：1 秒周期 × 10 回（S7）"
 "$W/netclient" 203.0.113.20 443 10 1000 500
 sleep 12  # ビーコン集計を待つ
@@ -132,6 +144,10 @@ check("ntfy に通知が届いた（critical を含む）", any(x.get("priority"
 check("通知本文に理由の説明が入っている", any("脅威インテル（既知の悪性" in x.get("message","") for x in n))
 st = json.load(open(sys.argv[1].replace("events.jsonl", "status.json")))
 check("F: 状態ソケットが critical の警告を返す", any(a["level"] == "critical" for a in st.get("alerts", [])) and st.get("version"))
+g = find(lambda e: e["network"]["kind"] == "listen" and e.get("source",{}).get("port") == 8888)
+check("G: 0.0.0.0:8888 の待受に D3", g and "D3" in sig(g[0]))
+hh = find(lambda e: e["network"]["kind"] == "connect" and "npm" in e["process"].get("parent_chain", []))
+check("H: npm 配下の python に D4", hh and "D4" in sig(hh[0]))
 print("RESULT:", "OK" if ok else "NG")
 sys.exit(0 if ok else 1)
 PY

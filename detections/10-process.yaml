@@ -75,4 +75,4 @@ detections:
     when:
       all:
         - { field: process.code_signature.status, op: in, value: [apple, package] }
-        - { field: process.name, op: not_in, value: ["@shells_interp", "@downloaders"] }
+        - { field: process.name, op: not_in, value: ["@shells_interp", "@downloaders", ssh, scp, sftp, rsync] }
