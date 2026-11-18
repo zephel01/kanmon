@@ -12,7 +12,7 @@
 ### 追加
 - **居座りの検知**（`detections/60-persistence.yaml`、P1〜P7・PR・PRt）：kanmond が 1 時間ごとに読むだけの走査をし、前回からの追加・変更をイベント（`persistence`）にする。初回は基準の記録だけ
   - Claude Code のフック（`.claude/settings.json`）、VS Code の folderOpen タスク（`.vscode/tasks.json`、コメント付き JSON に対応）、Python の `.pth` の import 行、`.github/workflows`、Git のフック、LaunchAgents・LaunchDaemons・systemd、シェルの rc のダウンロード実行
-  - 中身にダウンロード・パイプでの実行・インラインのコード・base64・一時フォルダの参照があると重くなる
+  - 中身にダウンロード・パイプでの実行・インラインのコード・base64・一時フォルダの参照があると重くなる。自動起動は「起動するコマンド」（plist の ProgramArguments・systemd の ExecStart）だけを見る。ワークフローは CI の設定として URL 等が普通に書かれるので、特徴は付けず変化だけを知らせる。シェルの rc は `curl … | sh`・`$(curl …)`・`base64 -d | sh` の形だけを拾う
   - 走査の場所は `[persistence] roots`（既定 `~/kanmon-work`）。kanmond は root で動くので、`~/` はログイン中のユーザーのホームに読み替える。`node_modules`・`target` 等は潜らない
 - **`kanmonctl scan`**：同じ走査をその場で行い、一覧を表示する（`--risky` で怪しいものだけ、`--json`）。`sudo` 不要
 
