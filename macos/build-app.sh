@@ -18,6 +18,16 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/KanmonBar"
 sed "s/__VERSION__/$VERSION/g" KanmonBar/Resources/Info.plist > "$APP/Contents/Info.plist"
+
+# アイコン（AppIcon.png → AppIcon.icns）
+ICONSET="build/AppIcon.iconset"
+rm -rf "$ICONSET" && mkdir -p "$ICONSET"
+for s in 16 32 128 256 512; do
+  sips -z "$s" "$s" KanmonBar/Resources/AppIcon.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+  d=$((s * 2))
+  sips -z "$d" "$d" KanmonBar/Resources/AppIcon.png --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+done
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 
 if [ "$SIGN_ID" = "-" ]; then

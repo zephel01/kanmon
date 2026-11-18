@@ -12,6 +12,8 @@
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
+  <!-- ログイン項目に Kanmon（メニューバーアプリ）の名前とアイコンで表示させる（macOS 13 以降） -->
+  <key>AssociatedBundleIdentifiers</key><array><string>io.github.zephel01.kanmon</string></array>
   <key>StandardErrorPath</key><string>/Library/Logs/kanmon/kanmond.log</string>
 </dict>
 </plist>

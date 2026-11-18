@@ -237,6 +237,42 @@ mod tests {
         assert!(respond("garbage", &sh).contains("unknown"));
     }
 
+    /// メニューバーアプリ（Swift）との取り決め。キー名を変えたら Swift 側の CodingKeys と
+    /// tests/fixtures/status-snapshot.json も直すこと（Swift 側のテストが同じファイルを読む）
+    #[test]
+    fn snapshot_matches_contract_fixture() {
+        let mut alerts = VecDeque::new();
+        alerts.push_back(AlertItem {
+            id: "e_1".into(),
+            ts: "2026-11-18T12:30:00.123+09:00".into(),
+            level: "critical".into(),
+            score: 160,
+            kind: "connect".into(),
+            title: "kanmon CRITICAL 160点: updater → 198.51.100.7:443".into(),
+            body: "【理由】合計 160 点（critical）".into(),
+        });
+        let snap = Snapshot {
+            version: "0.1.0".into(),
+            host: "mbp-alice".into(),
+            os: "macos".into(),
+            mode: "learning".into(),
+            learning: true,
+            learning_until: Some("2026-11-25T10:00:00+09:00".into()),
+            started_at: "2026-11-18T12:00:00+09:00".into(),
+            detections: 30,
+            intel: 1744,
+            counts_24h: [("critical".to_string(), 1), ("notice".to_string(), 3), ("warn".to_string(), 2)]
+                .into_iter()
+                .collect(),
+            alerts,
+            last_event_at: Some("2026-11-18T12:30:00.123+09:00".into()),
+            events_path: "/Library/Logs/kanmon/events.jsonl".into(),
+        };
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/status-snapshot.json");
+        let fixture: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(&snap).unwrap(), fixture);
+    }
+
     #[test]
     fn socket_roundtrip_and_uid() {
         let dir = std::env::temp_dir().join(format!("kanmon-sock-{}", std::process::id()));

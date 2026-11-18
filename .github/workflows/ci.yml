@@ -23,9 +23,12 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Swift のテスト（kanmond との JSON の取り決め）
+        run: cd macos/KanmonBar && swift test
       - name: Kanmon.app（メニューバーアプリ）をビルド
         run: bash macos/build-app.sh
       - name: バンドルの中身を確認
         run: |
           plutil -p macos/build/Kanmon.app/Contents/Info.plist
           file macos/build/Kanmon.app/Contents/MacOS/KanmonBar
+          test -s macos/build/Kanmon.app/Contents/Resources/AppIcon.icns

@@ -28,6 +28,17 @@ struct Snapshot: Codable, Equatable {
     let alerts: [AlertItem]
     let lastEventAt: String?
     let eventsPath: String
+
+    /// kanmond の JSON は snake_case。`counts_24h` は Foundation の自動変換だと
+    /// `counts24H` になって一致しないため、キーはすべて明示する。
+    enum CodingKeys: String, CodingKey {
+        case version, host, os, mode, learning, detections, intel, alerts
+        case learningUntil = "learning_until"
+        case startedAt = "started_at"
+        case counts24h = "counts_24h"
+        case lastEventAt = "last_event_at"
+        case eventsPath = "events_path"
+    }
 }
 
 /// メニューバーに出す状態
