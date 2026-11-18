@@ -24,6 +24,11 @@ kanmon inspects every connection entering or leaving your machine and records tw
 
 It then alerts you on suspicious traffic and **explains why** it flagged it. Detection rules are plain YAML, so you can respond to new techniques **without rebuilding**.
 
+<p align="center">
+  <img src="docs/images/menubar.png" width="400" alt="Kanmon.app menu: status, learning period, 24-hour counts by level, recent alerts">
+  <br><sub>The macOS menu bar app (Kanmon.app; UI in Japanese). Click an alert to see the full explanation</sub>
+</p>
+
 > [!NOTE]
 > v0.1 **observes and alerts only**. It does not block yet; blocking is the next milestone.
 > Documentation beyond this page is currently in Japanese.
