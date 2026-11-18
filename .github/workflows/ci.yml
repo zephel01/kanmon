@@ -26,6 +26,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: SwiftUI のマクロを使っていないか（Command Line Tools ではビルドできないため）
+        run: |
+          if grep -rnE '@State[[:space:]]|@State$|@Observable|@Bindable|#Preview' macos/KanmonBar/Sources; then
+            echo "SwiftUI のマクロは使えません（CLAUDE.md 参照）"; exit 1
+          fi
       - name: Swift のテスト（kanmond との JSON の取り決め）
         run: cd macos/KanmonBar && swift test
       - name: Kanmon.app（メニューバーアプリ）をビルド

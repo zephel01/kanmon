@@ -16,4 +16,5 @@
 - 外部入力（パケット・DNS・フィード・ルールファイル・プロセス名）は信用しない。
   - 通知や外部コマンドには引数として渡し、シェルを経由しない。
   - フィードは https のみ。TLS 検証を無効にしない。
+- Kanmon.app（Swift）では SwiftUI のマクロ（`@State`・`@Observable`・`#Preview` 等）を使わない。利用者は Command Line Tools だけでビルドしており、マクロのプラグイン（SwiftUIMacros）が無いため失敗する。状態は `ObservableObject` と `@Published`・`@StateObject`・`@ObservedObject`（プロパティラッパー）で持つ。CI は Xcode を使うので通ってしまう点に注意（CI に検査を入れてある）
 - コメントとドキュメントは日本語（`README.en.md` のみ英語）。「推測」と「要検証」の区別は設計書の表記に合わせる。

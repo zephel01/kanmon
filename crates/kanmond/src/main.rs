@@ -5,6 +5,14 @@
 //!   kanmond --config ./dev.toml --print          # イベントを標準出力にも出す
 //!   kanmond --config ./dev.toml --once --print   # 1 回だけ収集して終了（動作確認用）
 
+/// kanmond のログ 1 行（先頭に時刻を付ける）
+#[macro_export]
+macro_rules! logln {
+    ($($a:tt)*) => {
+        eprintln!("{} kanmond: {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), format_args!($($a)*))
+    };
+}
+
 mod capture;
 mod config;
 mod dnswatch;
@@ -42,7 +50,7 @@ fn main() -> anyhow::Result<()> {
     let a = Args::parse();
     let cfg = config::Config::load(a.config.as_deref())?;
     if unsafe { libc::geteuid() } != 0 {
-        eprintln!("kanmond: root 以外で実行中です。他ユーザーのプロセスは帰属・識別できません");
+        logln!("root 以外で実行中です。他ユーザーのプロセスは帰属・識別できません");
     }
     let mut m = monitor::Monitor::new(cfg)?;
     m.print = a.print;
@@ -50,10 +58,10 @@ fn main() -> anyhow::Result<()> {
         // DNS・SNI の観測を少し待ってから 1 回だけ収集する（--once のとき）
         std::thread::sleep(std::time::Duration::from_millis(a.wait_ms));
         let n = m.tick()?;
-        eprintln!("kanmond: {n} 件を記録");
+        logln!("{n} 件を記録");
         if a.beacon_now {
             let b = m.beacon_batch()?;
-            eprintln!("kanmond: ビーコン報告 {b} 件");
+            logln!("ビーコン報告 {b} 件");
         }
         // 通知スレッドが送り終えるのを少し待つ
         std::thread::sleep(std::time::Duration::from_millis(300));
