@@ -1,125 +1,128 @@
-# kanmon（関門）— 第1弾：監視のみ
+<div align="center">
 
-> 旧仮称 netmon。netmon 時代のログ（`netmon.*` 欄）は `kanmonctl` が自動で読み替える。
+# kanmon（関門）
 
-macOS / Linux 向けの、プロセス単位の通信監視ツール。設計は [docs/design-v1.md](docs/design-v1.md)。
+**新しい手口に自分で追いつける、macOS / Linux 向けのプロセス単位の通信監視ツール**
 
-第1弾は **監視と通知だけで、遮断はしない**。各通信について「どの実行ファイルが（署名・パッケージ・ハッシュ・親）」「どこへ」通信したかを記録し、YAML の検知ルールで点数を付けて通知する。
-新しい手口が出てきたら、**YAML を 1 ファイル足し → 過去ログに当てて確かめ → 配置する**。デーモンは 5 秒以内に読み直すので、再ビルドは要らない。
+[![CI](https://github.com/zephel01/kanmon/actions/workflows/ci.yml/badge.svg)](https://github.com/zephel01/kanmon/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue)](CHANGELOG.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)
 
-| 項目 | 第1弾の状態 |
-|---|---|
-| 収集 | ポーリング（既定 500ms）。Linux は `/proc/net/*` と `/proc/<pid>/fd`、macOS は `lsof` と libproc |
-| 識別 | macOS：codesign（Team ID・署名 ID・Apple / Developer ID / ad-hoc / 未署名・`--verify --strict` で改ざん検出）。Linux：dpkg / rpm の所有パッケージ。両 OS：SHA-256、インタプリタは「インタプリタ＋スクリプト」単位 |
-| 検知 | YAML ルール（S1〜S7・S9・S11・S12・S14〜S18、減点ルール）。ビーコン周期性・DGA らしさ・脅威インテル・ベースライン差分 |
-| 通知 | macOS 通知センター / Linux notify-send / ntfy。warn 以上は閉じるまで残るダイアログ（macOS）／期限なし通知（Linux）で、理由の説明付きの全文を出す。同じ通知は 10 分に 1 回まで。死活監視の push URL |
-| 保存 | SQLite（WAL）と ECS 寄せの JSONL（ローテーション付き） |
-| 遮断 | **なし**（第2弾：Linux の eBPF＋NFQUEUE → [HANDOFF.md](HANDOFF.md)、第3弾：macOS の Network Extension） |
+日本語 | [English](README.en.md)
 
-## 構成
-```
-crates/kanmon-core/   OS 非依存：検知ルールエンジン・許可/拒否ルール・スコア・ビーコン・DGA・インテル・保存
-crates/kanmond/       監視デーモン（収集・識別・通知・フィード取得）
-crates/kanmonctl/     CLI（check / replay / tail / beacon / status）
-detections/           同梱の検知ルール（YAML）
-examples/detections/  追加ルールの例（パッケージマネージャ配下の通信）
-packaging/            設定例・systemd unit・launchd plist・導入スクリプト
-tests/harness/        Linux 動作確認ハーネス（文書用 IP とローカルのみに向ける）
-tests/fixtures/       再生テスト用イベント
-```
+</div>
 
-## ビルドと導入
+---
+
+関門（kanmon）は、関所のように「通るものを改める門」のことです。
+kanmon は端末から出入りする通信を 1 本ずつ調べて、次の 2 つを記録します。
+- **どの実行ファイルが通信したか**：署名、パッケージ、ハッシュ、親プロセス
+- **どこへ通信したか**
+
+そのうえで、怪しい通信は**理由付きで**知らせます。判定ルールは YAML で書けるので、新しい手口が出てきても**再ビルドせずに**自分で対応できます。
+
+<!-- スクリーンショット：docs/images/alert-dialog.png を追加したらコメントを外す
+<p align="center"><img src="docs/images/alert-dialog.png" width="480" alt="警告ダイアログ"></p>
+-->
+
+> [!NOTE]
+> v0.1 は**監視と通知だけ**で、通信の遮断はまだしません。遮断はロードマップの次の段階です。
+
+## 特徴
+- 🔍 **プロセス単位で見る**：通信ごとに、実行ファイル・署名（Apple / Developer ID / ad-hoc / 未署名）・所有パッケージ・SHA-256・親プロセスの列を記録します
+- 🧩 **ルールは YAML**：書く → `kanmonctl replay` で過去ログに当てて確かめる → 置く、で反映されます。デーモンは 5 秒以内に読み直します
+- 💬 **なぜ止めたかが分かる通知**：理由・点数・プロセス・宛先を全文で表示します。warn 以上は閉じるまで残ります
+- 📡 **ビーコン検知**：C2 によくある「一定周期の通信」を統計で拾います。正規のクラウドを経由した C2 にも効きます
+- 🛡️ **脅威インテル**：Feodo Tracker・Spamhaus DROP・ローカルの拒否リストと照合します
+- 🔒 **自分の身も守る**：root 所有でないルールは読みません。通知は引数で渡すので注入できません。外部の死活監視とも連携できます
+
+## クイックスタート
+Rust 1.88 以上が必要です。
+
+**macOS**
 ```bash
+git clone https://github.com/zephel01/kanmon.git && cd kanmon
 cargo build --release
-cargo test --workspace          # 単体テスト＋検知ルールの回帰テスト
-
-# Linux（systemd）
-sudo packaging/install-linux.sh
-sudo journalctl -u kanmond -f
-
-# macOS（launchd）
 sudo packaging/install-macos.sh
-sudo tail -f /Library/Logs/kanmon/kanmond.log
 ```
-- root で動かす。root でないと、他ユーザーのプロセスの通信を帰属・識別できない。
-- 導入直後の 7 日間は `learning` モードで動く。ベースラインを作り、通知は warn 以上だけにする。
-- root 実行時は `strict_owner = true`（既定）により、検知ルール・許可ルール・拒否リストが **root 所有かつ group/other 書込不可** でないと読まない。一般ユーザー権限のマルウェアが「自分の点を下げるルール」を置けないようにするため。
 
-## 新しい事象への対応手順
+**Linux（systemd）**
 ```bash
-# 1) ルールを書く（例：examples/detections/60-supply-chain.yaml）
-# 2) 文法と既存ルールとの組み合わせを確認
-kanmonctl check --detections /etc/kanmon/detections --extra ./my-rule.yaml
-# 3) 過去ログに当てて、何件当たるか・誤検知が出ないかを見る
-sudo kanmonctl replay --events /var/log/kanmon/events.jsonl \
-  --detections /etc/kanmon/detections --extra ./my-rule.yaml --only X1
-# 4) 配置（デーモンが 5 秒以内に再読込。ルールに誤りがあれば前のルールのまま動き、通知で知らせる）
-sudo install -o root -m 0644 ./my-rule.yaml /etc/kanmon/detections/
+git clone https://github.com/zephel01/kanmon.git && cd kanmon
+cargo build --release
+sudo packaging/install-linux.sh
 ```
-ローテーション済みのログ（`events.jsonl.1` 等）も `--events` に渡せる。`-` を渡すと標準入力から読む。
 
-### ルールの書き方
+警告を見るには次を実行します。
+```bash
+sudo kanmonctl alerts --file /Library/Logs/kanmon/events.jsonl   # macOS
+sudo kanmonctl alerts                                            # Linux
+```
+
+導入直後の 7 日間は**学習期間**です。この間は普段の通信を覚え、warn 以上だけを通知します。
+
+## 仕組み
+```mermaid
+flowchart LR
+  subgraph collect["収集（kanmond）"]
+    S["ソケット一覧<br/>Linux: /proc/net<br/>macOS: lsof + libproc"]
+    P["プロセス識別<br/>署名・パッケージ<br/>SHA-256・親プロセス"]
+  end
+  subgraph judge["判定（kanmon-core）"]
+    F["事実の付与<br/>脅威インテル・ベースライン差分<br/>DGA・ビーコン"]
+    D["検知ルール<br/>detections/*.yaml"]
+    R["許可/拒否ルール<br/>rules.json"]
+  end
+  S --> P --> F --> D --> O["点数 → レベル"]
+  R --> O
+  O --> N["通知<br/>ダイアログ / D-Bus / ntfy"]
+  O --> L["保存<br/>JSONL（ECS 互換）/ SQLite"]
+  L -. "kanmonctl replay" .-> D
+```
+
+## 検知ルールの例
 ```yaml
-lists:
-  my_hosts: [evil.example, bad.test]
 detections:
-  - id: X2                      # 一意（重複はエラー）
-    name: short_name
-    points: 30                  # 負の値で減点
-    kinds: [connect]            # connect / accept / listen / raw_socket / beacon_report（省略時は全部）
+  - id: X1
+    name: pkg_install_script_network
+    points: 25
+    description: パッケージ導入処理の配下から外部へ通信
+    kinds: [connect]
     when:
-      all:                      # all / any / not を入れ子にできる
-        - { field: destination.registered_domain, op: in, value: "@my_hosts" }
-        - not: { field: process.code_signature.status, op: eq, value: apple }
+      all:
+        - { field: network.scope, op: eq, value: internet }
+        - { field: process.parent_chain, op: in, value: [npm, pip, pip3, uv, cargo] }
+        - { field: process.name, op: in, value: [sh, bash, curl, wget] }
 ```
-`description` は通知や `kanmonctl alerts` にそのまま出るので、短い日本語で書く。
-演算子は `eq ne in not_in prefix suffix contains regex gt gte lt lte exists missing` の 14 種類。
-- `ci: true` で大文字・小文字を区別しない。
-- フィールドが配列なら、どれか 1 つが一致すれば真。
-- `prefix` の `~/` は `/Users/*/`・`/home/*/`・`/root/` に展開する。
-- キー名の誤記はエラーになる（`deny_unknown_fields`）。
+同梱ルールは 19 件（S1〜S18 と減点ルール）です。書き方と、ルールから参照できるフィールドは [docs/detections.md](docs/detections.md) にあります。
 
-### ルールから参照できる主なフィールド
-| フィールド | 内容 |
+## ドキュメント
+| 文書 | 内容 |
 |---|---|
-| `network.kind` / `direction` / `transport` / `scope` | 種別、方向、tcp / udp / raw / packet、loopback / lan / internet / all |
-| `process.executable` / `name` / `args` / `user` / `uid` | 実行ファイル、引数、ユーザー |
-| `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / adhoc / unsigned / package / unmanaged / unknown |
-| `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
-| `process.hash.sha256` / `proc_key` | ハッシュ、安定識別キー |
-| `process.parent.name` / `parent_chain` | 親、親から上へ最大 6 段の実行ファイル名 |
-| `process.exe_deleted` / `memfd` / `hidden` / `interpreter` / `script` | 削除済み、memfd、隠しファイル、インタプリタとスクリプト |
-| `process.file_age_s` / `first_seen_age_s` | 実行ファイル更新からの秒数、kanmon が初めて見てからの秒数 |
-| `source.ip` / `port`、`destination.ip` / `port` / `domain` / `registered_domain` | 端点（第1弾では `domain` は空） |
-| `kanmon.ti_match` / `ti_source` | 脅威インテルに一致したか、どのリストか |
-| `kanmon.dest_first_for_process` / `port_first_for_process` / `listen_new` | ベースライン差分（learning 中は常に false） |
-| `kanmon.dga_score` | DGA らしさ（0〜1、ドメインがあるときだけ） |
-| `kanmon.beacon.score` / `n` / `median_interval_s` / `mad_s` | ビーコン（`beacon_report` のみ） |
+| [docs/detections.md](docs/detections.md) | 検知ルールの書き方、フィールド一覧、同梱ルール |
+| [docs/configuration.md](docs/configuration.md) | 設定、CLI、許可/拒否ルール、保存先 |
+| [docs/design-v1.md](docs/design-v1.md) | 設計書（脅威モデル・アーキテクチャ・ロードマップ） |
+| [CHANGELOG.md](CHANGELOG.md) | 変更履歴 |
 
-## CLI
-```bash
-kanmonctl alerts                         # 直近 24h の warn 以上を理由の説明付きで（見逃した通知の確認）
-kanmonctl tail -f --min-level notice     # 見やすく表示
-kanmonctl status                         # 直近 24h のレベル別件数とスコア上位
-kanmonctl beacon --min 0.5               # ビーコン候補
-kanmonctl check --detections DIR [--extra FILE] [--rules rules.json]
-kanmonctl replay --events FILE --detections DIR [--extra FILE] [--only ID] [--json]
-```
+## ロードマップ
+- [x] **v0.1** 両 OS の監視・検知・通知、YAML ルール、replay、ビーコン、脅威インテル
+- [ ] Linux での遮断（eBPF + NFQUEUE、拒否マップのピン留め、フェイルオープン/クローズの切替）
+- [ ] macOS での遮断（Network Extension、実行中プロセスの署名検証）
+- [ ] DNS の強化（ドメイン名の付与、DoH 迂回の検知）
+- [ ] 送信量の急増検知、新規登録ドメイン（NRD）フィード
+- [ ] Web UI、syslog / SIEM 連携
 
-## 許可/拒否ルール（`rules.json`）
-設計書 §18.1 の形式の配列。第1弾は遮断しないので、一致したときの扱いは次のとおり。
-- `allow`：通知を抑える。
-- `deny`：`would_deny` として最低でも warn で通知する。
-- 脅威インテルに一致した通信は、allow ルールより優先する。
-```json
-[{"id":"vscode-github","action":"allow","direction":"outbound",
-  "process":{"match":"signature","team_id":"UBF8T346G9","signing_id":"com.microsoft.VSCode"},
-  "remote":{"cidrs":["140.82.112.0/20"],"ports":[443],"protocol":"tcp"}}]
-```
+## 既知の限界（v0.1）
+- **ポーリング方式**なので、収集間隔（既定 500ms）より短い接続は取りこぼすことがあります
+- 宛先は IP だけで、**ドメイン名は付きません**。ドメインを使うルールは replay と、将来の DNS 強化で効きます
+- root を取られた後は止められてしまいます。`heartbeat_url` で外側から死活を監視してください
+- コンテナや別の network namespace の通信は対象外です
 
-## 既知の限界（第1弾）
-- **ポーリングのため、間隔より短い接続は取りこぼす**。短い HTTP ビーコンも一部は見えない。確実に取るには第2弾（eBPF）と第3弾（Network Extension）が必要。
-- **ドメイン名が付かない**（IP のみ）。DGA（S9）・トンネル系（S18）・新規登録ドメイン（S8）は replay 用か、第5弾の DNS 強化以降に効く。
-- 送信量（S13）は未実装。帰属できるのはデーモン自身の network namespace だけで、コンテナ内の通信は見えない。
-- macOS の識別はディスク上の署名を見ている（`codesign`）。実行中プロセスの動的な検証（`SecCodeCheckValidity`）は第3弾で行う。
-- root を取られた後は止められる。`heartbeat_url` を設定し、途絶を外側で検知させること。
+## コントリビュート
+- Issue・PR を歓迎します。開発ルールは [CLAUDE.md](CLAUDE.md) にあります（テストの宛先は RFC 5737 の文書用 IP に限る、など）
+- 脆弱性は公開 Issue ではなく、[SECURITY.md](SECURITY.md) の手順で報告してください
+
+## ライセンス
+[Apache License 2.0](LICENSE)

@@ -11,8 +11,9 @@
   - root が使える環境では `sudo tests/harness/run_linux.sh`
 - `kanmon-core` に OS 依存コードを入れない。OS 依存は `kanmond` に置き、`#[cfg(target_os = ...)]` で分ける。macOS 専用の解析関数は純関数にして Linux でもテストできるようにする。
 - 検知ルール（`detections/*.yaml`）を変えたら、`tests/fixtures/replay-cases.jsonl` に期待値を足す（`crates/kanmon-core/tests/replay_cases.rs` が回帰を見る）。
-- イベントのフィールド名は ECS 寄せを保ち、追加したら README のフィールド表を更新する。
+- イベントのフィールド名は ECS 寄せを保ち、追加したら `docs/detections.md` のフィールド表を更新する。
+- 利用者に見える変更は `CHANGELOG.md` の `[Unreleased]` に書く。README を変えたら `README.en.md` も合わせる。
 - 外部入力（パケット・DNS・フィード・ルールファイル・プロセス名）は信用しない。
   - 通知や外部コマンドには引数として渡し、シェルを経由しない。
   - フィードは https のみ。TLS 検証を無効にしない。
-- コメントとドキュメントは日本語。「推測」と「要検証」の区別は設計書の表記に合わせる。
+- コメントとドキュメントは日本語（`README.en.md` のみ英語）。「推測」と「要検証」の区別は設計書の表記に合わせる。
