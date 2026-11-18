@@ -1,0 +1,71 @@
+<!--
+  kanmon 用の Sysmon 設定（beta）
+  - 取るもの：プロセスの起動と終了（ID 1・5）、プロセスが始めた接続（ID 3）、
+    DNS の問い合わせ（ID 22）、居座りに関わるファイルの作成（ID 11）、
+    自動起動に関わるレジストリの変更（ID 12〜14）。
+  - 既定の Sysmon は接続（ID 3）を取らない。この設定で有効にする。
+  - schemaversion は古めの 4.50 にしてある。新しい Sysmon は古いスキーマを受け付ける。
+    【要検証】実機で `sysmon -c` が警告を出さないか（出たら `sysmon -s` で版を確かめる）。
+  - ID 3・22 は全部取るのでイベントが多い。重いと感じたら <NetworkConnect onmatch="exclude">
+    に除外を足す（例：ブラウザ）。kanmon は全体を見たいので、beta では絞らない。
+-->
+<Sysmon schemaversion="4.50">
+  <HashAlgorithms>SHA256</HashAlgorithms>
+  <CheckRevocation/>
+  <EventFiltering>
+
+    <!-- ID 1：プロセスの起動。全部取る -->
+    <RuleGroup name="kanmon-process-create" groupRelation="or">
+      <ProcessCreate onmatch="exclude"/>
+    </RuleGroup>
+
+    <!-- ID 5：プロセスの終了。kanmon のプロセス表を片付けるのに使う -->
+    <RuleGroup name="kanmon-process-terminate" groupRelation="or">
+      <ProcessTerminate onmatch="exclude"/>
+    </RuleGroup>
+
+    <!-- ID 3：接続。kanmond 自身（Webhook の送信）は除く -->
+    <RuleGroup name="kanmon-network" groupRelation="or">
+      <NetworkConnect onmatch="exclude">
+        <Image condition="end with">\kanmond.exe</Image>
+      </NetworkConnect>
+    </RuleGroup>
+
+    <!-- ID 22：DNS の問い合わせ。どのプロセスが引いたかが取れる -->
+    <RuleGroup name="kanmon-dns" groupRelation="or">
+      <DnsQuery onmatch="exclude">
+        <Image condition="end with">\kanmond.exe</Image>
+      </DnsQuery>
+    </RuleGroup>
+
+    <!-- ID 11：居座りに関わる場所へのファイル作成だけ取る -->
+    <RuleGroup name="kanmon-file-create" groupRelation="or">
+      <FileCreate onmatch="include">
+        <TargetFilename condition="end with">.pth</TargetFilename>
+        <TargetFilename condition="contains">\Start Menu\Programs\Startup\</TargetFilename>
+        <TargetFilename condition="end with">\.claude\settings.json</TargetFilename>
+        <TargetFilename condition="end with">\.claude\settings.local.json</TargetFilename>
+        <TargetFilename condition="contains">\.github\workflows\</TargetFilename>
+        <TargetFilename condition="contains">\.git\hooks\</TargetFilename>
+        <TargetFilename condition="contains">\.vscode\</TargetFilename>
+        <TargetFilename condition="begin with">C:\Windows\System32\Tasks\</TargetFilename>
+        <TargetFilename condition="contains">\WindowsPowerShell\profile.ps1</TargetFilename>
+        <TargetFilename condition="contains">\PowerShell\profile.ps1</TargetFilename>
+        <TargetFilename condition="end with">_profile.ps1</TargetFilename>
+      </FileCreate>
+    </RuleGroup>
+
+    <!-- ID 12〜14：自動起動に関わるレジストリだけ取る -->
+    <RuleGroup name="kanmon-registry" groupRelation="or">
+      <RegistryEvent onmatch="include">
+        <TargetObject condition="contains">\CurrentVersion\Run</TargetObject>
+        <TargetObject condition="contains">\CurrentVersion\Policies\Explorer\Run</TargetObject>
+        <TargetObject condition="contains">\Windows NT\CurrentVersion\Winlogon\</TargetObject>
+        <TargetObject condition="contains">\Image File Execution Options\</TargetObject>
+        <TargetObject condition="end with">\ImagePath</TargetObject>
+        <TargetObject condition="contains">\Environment\UserInitMprLogonScript</TargetObject>
+      </RegistryEvent>
+    </RuleGroup>
+
+  </EventFiltering>
+</Sysmon>

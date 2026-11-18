@@ -132,8 +132,19 @@ impl Default for DnsCfg {
         Self {
             enabled: true,
             interfaces: vec![],
-            hosts_path: "/etc/hosts".into(),
-            resolv_conf: vec!["/etc/resolv.conf".into(), "/run/systemd/resolve/resolv.conf".into()],
+            hosts_path: if cfg!(windows) {
+                std::env::var_os("SystemRoot")
+                    .map(|r| PathBuf::from(r).join("System32").join("drivers").join("etc").join("hosts"))
+                    .unwrap_or_else(|| "C:\\Windows\\System32\\drivers\\etc\\hosts".into())
+            } else {
+                "/etc/hosts".into()
+            },
+            // Windows には resolv.conf が無い（DNS サーバーの変更の検知 N2 は beta では対象外）
+            resolv_conf: if cfg!(windows) {
+                vec![]
+            } else {
+                vec!["/etc/resolv.conf".into(), "/run/systemd/resolve/resolv.conf".into()]
+            },
             check_interval_s: 60,
             crosscheck: true,
             doh_url: "https://cloudflare-dns.com/dns-query".into(),
@@ -408,5 +419,14 @@ mod tests {
         let c: Config = toml::from_str(t).unwrap();
         assert_eq!(c.thresholds.warn, 60);
         assert!(!c.feeds.is_empty());
+    }
+
+    #[test]
+    fn windows_sample_config_parses() {
+        let t = include_str!("../../../packaging/windows/kanmon.toml.example");
+        let c: Config = toml::from_str(t).unwrap();
+        assert!(!c.volume.enabled);
+        assert!(!c.dns.crosscheck);
+        assert_eq!(c.persistence.roots.len(), 2);
     }
 }

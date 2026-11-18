@@ -1,0 +1,85 @@
+# kanmon 設定（Windows 版 beta）。省略した項目は既定値。
+# 場所：C:\ProgramData\kanmon\kanmon.toml（kanmon-setup.ps1 が置く。更新時も上書きしない）
+# 直したら：Restart-Service kanmond
+
+# learning：導入直後（ベースライン作成、warn 以上だけ通知）／ observe：通常
+mode = "learning"
+learning_days = 7
+# 接続の一覧を取る間隔。一覧に出る前に終わる短い接続は Sysmon（ID 3）で補う
+interval_ms = 1000
+
+# 既定の置き場所（変える必要はない）
+# data_dir = 'C:\ProgramData\kanmon\data'
+# detections_dir = 'C:\ProgramData\kanmon\detections'
+# rules_file = 'C:\ProgramData\kanmon\rules.json'
+# status_socket = '\\.\pipe\kanmon'    # トレイ（kanmon-tray）が読む。空文字で無効
+
+include_loopback = false
+retention_days = 90
+beacon_report_min = 0.6
+beacon_interval_s = 300
+feeds_refresh_hours = 24
+
+[thresholds]
+notice = 30
+warn = 60
+critical = 100
+
+[jsonl]
+# path = 'C:\ProgramData\kanmon\logs\events.jsonl'
+max_mb = 50
+keep = 5
+rotate = "size"
+keep_days = 30
+
+[log]
+# path = 'C:\ProgramData\kanmon\logs\kanmond.log'
+keep_days = 14
+
+[notify]
+# Windows では画面の通知はトレイ（kanmon-tray）が出す。ここを true にすると、
+# Windows のイベントログ（アプリケーション、ソース kanmon）にも書く
+local = true
+min_level = "notice"
+dedup_minutes = 10
+ntfy_url = ""
+ntfy_topic = ""
+ntfy_token = ""
+heartbeat_url = ""
+heartbeat_minutes = 5
+
+# Webhook（複数書ける）。format は json（汎用）/ slack / discord。https のみ。ホスト名は既定で入れない
+# [[notify.webhooks]]
+# url = "https://hooks.slack.com/services/…"
+# format = "slack"
+# min_level = "warn"
+# include_host = false
+
+[[feeds]]
+name = "feodo"
+url = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
+
+[[feeds]]
+name = "spamhaus_drop_v4"
+url = "https://www.spamhaus.org/drop/drop_v4.json"
+
+# Windows では DNS は Sysmon（ID 22）から読む。パケットは読まない
+[dns]
+enabled = true
+check_interval_s = 60
+crosscheck = false
+
+# 送信量は Windows の beta では取らない
+[volume]
+enabled = false
+
+# 居座り：スタートアップ・タスク スケジューラ・Run キー・サービス・PowerShell のプロファイル・
+# Python の .pth・.claude・.vscode・.github/workflows・.git/hooks を読むだけで調べる
+[persistence]
+enabled = true
+roots = ["~/kanmon-work", "~/source/repos"]
+interval_s = 3600
+max_depth = 6
+system = true
+watch_s = 60
+recent_window_s = 86400
