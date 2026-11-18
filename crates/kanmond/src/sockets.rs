@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// raw / packet は Linux の /proc/net からのみ生成される
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub enum Proto {
     Tcp,
     Udp,
@@ -59,6 +61,7 @@ impl Sock {
 
 // ---------------------------------------------------------------- Linux /proc/net
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn parse_hex_addr(s: &str) -> Option<SocketAddr> {
     let (a, p) = s.split_once(':')?;
     let port = u16::from_str_radix(p, 16).ok()?;
@@ -82,6 +85,7 @@ fn parse_hex_addr(s: &str) -> Option<SocketAddr> {
 
 /// `/proc/net/tcp*`・`udp*`・`raw*` の 1 ファイル分を解析（pid は未設定）。
 /// カーネルは 32bit 語をホストのバイト順で出すため、リトルエンディアン前提で変換する。
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn parse_proc_net(text: &str, proto: Proto) -> Vec<Sock> {
     let mut out = vec![];
     for line in text.lines().skip(1) {
@@ -117,6 +121,7 @@ pub fn parse_proc_net(text: &str, proto: Proto) -> Vec<Sock> {
 }
 
 /// `/proc/net/packet`（AF_PACKET）。列：sk RefCnt Type Proto Iface R Rmem User Inode
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn parse_proc_packet(text: &str) -> Vec<Sock> {
     text.lines()
         .skip(1)
