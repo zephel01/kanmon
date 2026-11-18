@@ -42,7 +42,7 @@ fn finding_label(f: &str) -> &str {
     match f {
         "hosts_changed" => "hosts が書き換えられた",
         "resolver_changed" => "DNS サーバーの設定が変わった",
-        "crosscheck_mismatch" => "暗号化 DNS で引き直した答えと合わない",
+        "crosscheck_mismatch" => "答えのサーバーが正しい証明書を出さない",
         "private_answer" => "公開ドメインがローカルの IP に解決された",
         "conflicting_answer" => "同じ問い合わせに違う応答が届いた",
         "unexpected_resolver" => "設定にない DNS サーバーから応答",
@@ -86,6 +86,9 @@ fn dns_text(v: &Value, level: &str, score: i64) -> (String, String) {
     if !other.is_empty() {
         let label = if f == "crosscheck_mismatch" { "暗号化 DNS の答え" } else { "もう一方の答え" };
         lines.push(format!("  {label}: {}", other.join(", ")));
+    }
+    for t in strs(v, "kanmon.dns.tls") {
+        lines.push(format!("  証明書: {t}"));
     }
     if let Some(sv) = s(v, "kanmon.dns.server") {
         lines.push(format!("  DNS サーバー: {sv}"));

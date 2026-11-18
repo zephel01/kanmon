@@ -9,8 +9,24 @@ struct AlertItem: Codable, Identifiable, Equatable {
     let kind: String
     let title: String
     let body: String
+    /// 当たった検知ルールの ID（古い kanmond は返さない）
+    let rules: [String]?
 
     var isSevere: Bool { level == "warn" || level == "critical" }
+}
+
+/// `{"cmd":"alerts"}` の応答：期間内の警告の一覧と、ルール別の件数
+struct AlertList: Codable, Equatable {
+    let level: String
+    let hours: Int
+    let alerts: [AlertItem]
+    let byRule: [String: Int]
+    let truncated: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case level, hours, alerts, truncated
+        case byRule = "by_rule"
+    }
 }
 
 /// kanmond の状態スナップショット（`{"cmd":"status"}` の応答）

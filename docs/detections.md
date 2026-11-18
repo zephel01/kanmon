@@ -68,7 +68,7 @@ detections:
 | `file.path` | 対象のファイル（hosts の書き換え） |
 | `kanmon.dns.finding` | DNS の改ざん検知の種類：`hosts_changed` / `resolver_changed` / `crosscheck_mismatch` / `private_answer` / `conflicting_answer` / `unexpected_resolver` |
 | `kanmon.dns.watched` / `redirected` / `unknown_public` | 監視リストのドメインが関わる / hosts で他所へ向けられている / 見慣れない公開 DNS |
-| `kanmon.dns.added` / `removed` / `added_scope` / `server` / `other` | 追加・削除された行や DNS サーバー、追加先の範囲、応答した DNS サーバー、比較相手の答え |
+| `kanmon.dns.added` / `removed` / `added_scope` / `server` / `other` / `tls` | 追加・削除された行や DNS サーバー、追加先の範囲、応答した DNS サーバー、比較相手の答え、答えの IP ごとの証明書の確認結果（N3） |
 | `kanmon.ti_match` / `ti_source` | 脅威インテルに一致したか、どのリストか |
 | `kanmon.dest_first_for_process` / `port_first_for_process` / `listen_new` | ベースラインとの差分（学習期間中は常に false） |
 | `kanmon.dga_score` | 自動生成ドメインらしさ（0〜1、ドメインがあるときだけ） |
@@ -113,10 +113,10 @@ detections:
 |---|---|---|
 | N1 / N1w / N1r | hosts が書き換えられた / 監視リストのドメインが含まれる / それが別のサーバーへ向けられている | +30 / +40 / +60 |
 | N2 / N2p | DNS サーバーの設定が変わった（Wi-Fi の切り替えでも起きる）/ 見慣れない公開 DNS が設定された | +10 / +50 |
-| N3 | 監視リストのドメインの答えが、暗号化 DNS（DoH）で引き直した答えと /24 でも重ならない | +40 |
+| N3 | 監視リストのドメインの答えが DoH で引き直した答えと食い違い、しかも答えの IP がそのドメインの正しい TLS 証明書を出さない | +70 |
 | N4 / N4w | 公開ドメインがループバック・社内の IP に解決された / それが監視リストのドメイン | +30 / +30 |
 | N5 / N5w | 同じ問い合わせに中身の違う応答が届いた / それが監視リストのドメイン | +40 / +30 |
-| N6 / N6u | 設定にない DNS サーバーから応答 / それがよく使われる公開 DNS でもない | +20 / +20 |
+| N6 / N6u | 設定にない DNS サーバーから応答 / それがよく使われる公開 DNS でもない（記録のみ） | +10 / +10 |
 
 監視リスト（`dns.watch_domains`）の既定値は、パッケージ配布元（npm・PyPI・crates.io 等）、GitHub、Hugging Face、AI ベンダーの API、主要なログイン画面です。
 

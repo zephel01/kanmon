@@ -75,8 +75,8 @@ pub struct Monitor {
     pub print: bool,
 }
 
-/// （ドメイン, 受け身で見た答え, DoH の答え）
-type DohResult = (String, Vec<std::net::IpAddr>, std::result::Result<Vec<std::net::IpAddr>, String>);
+/// （ドメイン, 受け身で見た答え, DoH と証明書の確認結果）
+type DohResult = (String, Vec<std::net::IpAddr>, std::result::Result<crate::dnswatch::Crosscheck, String>);
 
 fn hostname() -> String {
     let mut buf = [0u8; 256];
@@ -122,25 +122,28 @@ impl Monitor {
             .then(|| chrono::DateTime::from_timestamp(installed_at + cfg.learning_days as i64 * 86_400, 0))
             .flatten()
             .map(|t| t.with_timezone(&Local).to_rfc3339_opts(SecondsFormat::Secs, false));
-        let shared = Shared::new(Snapshot {
-            version: env!("CARGO_PKG_VERSION").into(),
-            host: host.clone(),
-            os: os.into(),
-            mode: cfg.mode.clone(),
-            learning_until,
-            started_at: Local::now().to_rfc3339_opts(SecondsFormat::Secs, false),
-            detections: dets.detections.len(),
-            intel: intel.len(),
-            events_path: cfg.jsonl.path.display().to_string(),
-            ..Default::default()
-        });
+        let shared = Shared::with_db(
+            Snapshot {
+                version: env!("CARGO_PKG_VERSION").into(),
+                host: host.clone(),
+                os: os.into(),
+                mode: cfg.mode.clone(),
+                learning_until,
+                started_at: Local::now().to_rfc3339_opts(SecondsFormat::Secs, false),
+                detections: dets.detections.len(),
+                intel: intel.len(),
+                events_path: cfg.jsonl.path.display().to_string(),
+                ..Default::default()
+            },
+            Some(cfg.data_dir.join("kanmon.db")),
+        );
         // 再起動しても直近の警告がメニューバーに出るよう、DB から読み戻す（新しい順）
         let since = Utc::now().timestamp() - 86_400;
         if let Ok(evs) = store.recent_events(since, &["notice", "warn", "critical"], crate::status::MAX_ALERTS as i64) {
             for v in evs.iter().rev() {
                 let mut v = v.clone();
                 ev::migrate_legacy(&mut v);
-                if let Some(a) = alert_item_from_event(&v) {
+                if let Some(a) = crate::status::alert_item_from_event(&v) {
                     shared.push_alert(a);
                 }
             }
@@ -583,6 +586,7 @@ impl Monitor {
             kind: kind.into(),
             title: title.into(),
             body: body.into(),
+            rules: crate::status::signal_ids(v),
         });
     }
 
@@ -687,8 +691,9 @@ impl Monitor {
         self.doh_inflight.insert(name.clone());
         let url = self.cfg.dns.doh_url.clone();
         let tx = self.doh_tx.clone();
+        let hist = self.doh_state.get(&name).map(|(_, h)| h.clone()).unwrap_or_default();
         let spawned = std::thread::Builder::new().name("kanmon-doh".into()).spawn(move || {
-            let r = crate::dnswatch::doh_lookup(&url, &name).map_err(|e| format!("{e:#}"));
+            let r = crate::dnswatch::crosscheck(&url, &name, &passive, &hist).map_err(|e| format!("{e:#}"));
             let _ = tx.send((name, passive, r));
         });
         if spawned.is_err() {
@@ -704,10 +709,16 @@ impl Monitor {
         for (name, passive, res) in done {
             self.doh_inflight.remove(&name);
             match res {
-                Ok(doh) => {
+                Ok(cc) => {
                     let hist = self.doh_state.get(&name).map(|(_, h)| h.clone()).unwrap_or_default();
-                    let mismatch = dnsguard::crosscheck_mismatch(&passive, &doh, &hist);
+                    let doh = cc.doh.clone();
                     let mut h = hist;
+                    // 正しい証明書を出した答えの IP も、以後は同じものとみなす（CDN の地域差）
+                    for (ip, v) in &cc.tls {
+                        if *v == crate::dnswatch::TlsVerdict::Valid && !h.contains(ip) {
+                            h.push(*ip);
+                        }
+                    }
                     for ip in &doh {
                         if !h.contains(ip) {
                             h.push(*ip);
@@ -716,11 +727,24 @@ impl Monitor {
                     let keep = h.len().saturating_sub(64);
                     h.drain(..keep);
                     self.doh_state.insert(name.clone(), (Instant::now(), h));
-                    if mismatch {
+                    // DoH と食い違うだけでは知らせない（CDN は問い合わせ元で答えが変わる）。
+                    // 答えの IP が、そのドメインの正しい証明書を出さないときだけ知らせる
+                    if cc.tampered() {
+                        use crate::dnswatch::TlsVerdict;
+                        let tls = cc
+                            .tls
+                            .iter()
+                            .map(|(ip, v)| match v {
+                                TlsVerdict::Valid => format!("{ip}: 正しい証明書"),
+                                TlsVerdict::Invalid(e) => format!("{ip}: 証明書の検証に失敗（{e}）"),
+                                TlsVerdict::Inconclusive(e) => format!("{ip}: 確認できない（{e}）"),
+                            })
+                            .collect();
                         let facts = ev::DnsFacts {
                             finding: "crosscheck_mismatch".into(),
                             watched: true,
                             other: doh.iter().map(|x| x.to_string()).collect(),
+                            tls,
                             ..Default::default()
                         };
                         self.emit_dns(facts, Some(name.clone()), &passive, None, format!("crosscheck|{name}"));
@@ -794,9 +818,34 @@ impl Monitor {
         if old_s.as_deref() != Some(new_s.as_str()) {
             let _ = self.store.meta_set("dns.resolvers", &new_s);
         }
-        if !new.is_empty() {
-            self.known_resolvers = new;
+        // 一度でも設定に出た DNS サーバーは覚えておく（IPv6 の RA で配られる ISP の DNS 等が、
+        // 一覧から外れた後に応答しても「設定にない」としないため）
+        let mut seen: Vec<IpAddr> = self
+            .store
+            .meta_get("dns.resolvers_seen")
+            .ok()
+            .flatten()
+            .map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect())
+            .unwrap_or_default();
+        let before = seen.len();
+        for ip in &new {
+            if !seen.contains(ip) {
+                seen.push(ip.to_owned());
+            }
         }
+        let keep = seen.len().saturating_sub(64);
+        seen.drain(..keep);
+        if seen.len() != before || keep > 0 {
+            let s = seen.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
+            let _ = self.store.meta_set("dns.resolvers_seen", &s);
+        }
+        let mut known = seen;
+        for ip in new {
+            if !known.contains(&ip) {
+                known.push(ip);
+            }
+        }
+        self.known_resolvers = known;
     }
 
     /// DNS の改ざん検知イベントを作って評価・保存・通知する（同じ内容は 1 時間に 1 回）
@@ -919,22 +968,6 @@ impl Monitor {
         }
         Ok(n)
     }
-}
-
-/// 保存済みイベントから状態ソケット用の警告を作る（DB からの読み戻し用）
-fn alert_item_from_event(v: &serde_json::Value) -> Option<AlertItem> {
-    let s = |p: &str| ev::get_path(v, p).and_then(|x| x.as_str()).map(str::to_string);
-    let level = s("kanmon.level")?;
-    let (title, body) = kanmon_core::format::alert_text(v);
-    Some(AlertItem {
-        id: s("event.id")?,
-        ts: s("@timestamp").unwrap_or_default(),
-        score: ev::get_path(v, "kanmon.score").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
-        kind: s("network.kind").unwrap_or_default(),
-        level,
-        title,
-        body,
-    })
 }
 
 /// 親プロセス列の名前。インタプリタ（node・python・bash 等）の場合はスクリプト名も加える。

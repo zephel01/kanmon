@@ -24,6 +24,10 @@ lists:
     ["Google Chrome", "Google Chrome Helper", chrome, chromium, chromium-browser, firefox, firefox-bin, Safari,
      "Microsoft Edge", "Microsoft Edge Helper", msedge, "Brave Browser", brave, Arc, Vivaldi, vivaldi-bin, opera,
      com.apple.WebKit.Networking]
+  # ブラウザの補助プロセス（「Google Chrome Helper (Renderer)」等、版や役割で名前が変わる）を前方一致で見る
+  browser_prefixes:
+    ["Google Chrome", "Chromium", "Microsoft Edge", "Brave Browser", "Arc Helper", Vivaldi, Opera, Firefox,
+     "Safari", com.apple.WebKit]
   # 既知の公開 DoH/DoT サーバー（アプリ独自の DNS 迂回の手掛かり、設計書 §8）
   doh_ips:
     ["1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001", "8.8.8.8", "8.8.4.4",

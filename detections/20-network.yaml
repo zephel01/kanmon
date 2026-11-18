@@ -46,7 +46,10 @@ detections:
     kinds: [connect]
     when:
       all:
-        - { field: process.name, op: not_in, value: "@browsers", ci: true }
+        - not:
+            any:
+              - { field: process.name, op: in, value: "@browsers", ci: true }
+              - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
         - any:
             - { field: destination.port, op: eq, value: 853 }
             - all:

@@ -172,7 +172,10 @@ detections:
     when:
       all:
         - { field: destination.registered_domain, op: in, value: "@exfil_services", ci: true }
-        - { field: process.name, op: not_in, value: "@browsers", ci: true }
+        - not:
+            any:
+              - { field: process.name, op: in, value: "@browsers", ci: true }
+              - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
         # Discord アプリ本体は対象外
         - not: { field: process.name, op: contains, value: discord, ci: true }
 

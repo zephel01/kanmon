@@ -28,6 +28,32 @@
 | `[dns] watch_domains` | パッケージ配布元・GitHub・AI ベンダー等 | 書き換え・食い違いを重く見るドメイン（サブドメインも含む） |
 | `[dns] private_ok_suffixes` | 空 | プライベート IP に解決されても知らせない接尾辞（社内ドメイン等）。`.local`・`.test`・`ts.net` 等は最初から対象外 |
 
+## 更新・起動・停止
+### 更新（macOS）
+```bash
+cd ~/works/security/kanmon && git pull
+cargo build --release
+sudo packaging/install-macos.sh             # kanmond を入れ替えて再起動（設定ファイルは残す）
+macos/build-app.sh && macos/install-app.sh  # Kanmon.app を入れ替えて再起動（sudo 不要）
+```
+Linux は `sudo packaging/install-linux.sh`。どちらも、動いている古い方を止めてから新しい方を起動します。検知ルール（YAML）だけを変えたときは再起動は要りません（5 秒以内に読み直します）。
+
+### kanmond（デーモン）
+| 操作 | macOS | Linux |
+|---|---|---|
+| 状態 | `sudo launchctl print system/com.kanmon.kanmond \| grep -E "state\|pid"` | `systemctl status kanmond` |
+| 再起動 | `sudo launchctl kickstart -k system/com.kanmon.kanmond` | `sudo systemctl restart kanmond` |
+| 停止 | `sudo launchctl bootout system/com.kanmon.kanmond` | `sudo systemctl stop kanmond` |
+| 起動 | `sudo launchctl bootstrap system /Library/LaunchDaemons/com.kanmon.kanmond.plist` | `sudo systemctl start kanmond` |
+| ログ | `/Library/Logs/kanmon/kanmond.log` | `journalctl -u kanmond` |
+
+### Kanmon.app（メニューバー、macOS）
+| 操作 | コマンド |
+|---|---|
+| 起動 | `open /Applications/Kanmon.app` |
+| 終了 | メニューの「終了」（ログイン時の自動起動は残る） |
+| 自動起動をやめる | `launchctl bootout gui/$(id -u)/com.kanmon.bar` |
+
 ## CLI（kanmonctl）
 | コマンド | 用途 |
 |---|---|

@@ -81,10 +81,17 @@ struct MenuView: View {
                 }
                 HStack(spacing: 12) {
                     ForEach(["critical", "warn", "notice"], id: \.self) { lv in
-                        HStack(spacing: 4) {
-                            Circle().fill(levelColor(lv)).frame(width: 7, height: 7)
-                            Text("\(lv) \(s.counts24h[lv] ?? 0)").font(.caption.monospacedDigit())
+                        Button {
+                            store.windows.showList(level: lv, path: store.socketPath)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Circle().fill(levelColor(lv)).frame(width: 7, height: 7)
+                                Text("\(lv) \(s.counts24h[lv] ?? 0)").font(.caption.monospacedDigit()).underline()
+                            }
+                            .contentShape(Rectangle())
                         }
+                        .buttonStyle(.plain)
+                        .help("押すと \(lv) の警告の一覧を開きます")
                     }
                     Spacer()
                     Text("24時間").font(.caption2).foregroundStyle(.secondary)
@@ -125,6 +132,8 @@ struct MenuView: View {
             HStack {
                 Button("既読にする") { store.acknowledge() }
                     .disabled(store.unreadCount == 0)
+                Button("一覧") { store.windows.showList(level: "all", path: store.socketPath) }
+                    .disabled(store.snapshot == nil)
                 Button("ログを表示") { store.revealLog() }
                     .disabled(store.snapshot == nil)
                 Spacer()
