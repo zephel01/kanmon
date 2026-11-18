@@ -1,0 +1,95 @@
+# 居座り（開発ツールの設定・自動起動への仕込み）。イベントは network.kind = persistence。
+# kanmond が一定間隔（既定 1 時間）で読むだけの走査をし、前回からの「追加・変更」を評価する（初回は基準の記録だけ）。
+# 自分で設定を変えたときにも出るので、心当たりがあれば無視してよい。怪しい特徴（ダウンロード・パイプでの実行等）が
+# 付くと重くなる。
+detections:
+  - id: P1
+    name: claude_hook_added
+    points: 40
+    description: Claude Code のフック（起動時などに自動で動くコマンド）が追加された
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: claude_hook }
+        - { field: kanmon.persist.change, op: eq, value: added }
+
+  - id: P2
+    name: vscode_folderopen_added
+    points: 40
+    description: VS Code で、フォルダを開くと自動で動くタスク（folderOpen）が追加された
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: vscode_folderopen }
+        - { field: kanmon.persist.change, op: eq, value: added }
+
+  - id: P3
+    name: pth_exec_added
+    points: 50
+    description: Python の .pth に、起動のたびに実行される import 行が追加された（litellm の手口）
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: pth_exec }
+        - { field: kanmon.persist.change, op: eq, value: added }
+
+  - id: P4
+    name: workflow_changed
+    points: 10
+    # 開発で普通に変えるので記録のみ。怪しい特徴が付けば PR で重くなる
+    description: GitHub Actions のワークフローが追加・変更された
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: workflow }
+        - { field: kanmon.persist.change, op: in, value: [added, changed] }
+
+  - id: P5
+    name: git_hook_added
+    points: 30
+    description: Git のフック（commit・checkout 等で自動で動く）が追加・変更された
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: git_hook }
+        - { field: kanmon.persist.change, op: in, value: [added, changed] }
+
+  - id: P6
+    name: autostart_added
+    points: 30
+    description: 自動起動（LaunchAgents・LaunchDaemons・systemd 等）が追加・変更された
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: autostart }
+        - { field: kanmon.persist.change, op: in, value: [added, changed] }
+
+  - id: P7
+    name: rc_pipe_added
+    points: 60
+    description: シェルの設定に、ダウンロードしてそのまま実行する行が追加された
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: rc_pipe }
+        - { field: kanmon.persist.change, op: eq, value: added }
+
+  - id: PR
+    name: persistence_risky_command
+    points: 40
+    description: 仕込まれた中身に、ダウンロード・パイプでの実行・インラインのコード・base64 のどれかがある
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.change, op: in, value: [added, changed] }
+        - { field: kanmon.persist.risky, op: in, value: [network, pipe_shell, inline_code, base64] }
+
+  - id: PRt
+    name: persistence_tmp_path
+    points: 20
+    description: 仕込まれた中身が一時フォルダ（/tmp 等）のファイルを使う
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.change, op: in, value: [added, changed] }
+        - { field: kanmon.persist.risky, op: in, value: [tmp_path] }

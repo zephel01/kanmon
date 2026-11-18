@@ -75,6 +75,11 @@ pub struct Monitor {
     // ---- 送信量
     volume: kanmon_core::volume::VolumeTracker,
     last_volume: Option<Instant>,
+    // ---- 居座りの走査（別スレッド）
+    persist_tx: Sender<Vec<kanmon_core::persist::Item>>,
+    persist_rx: Receiver<Vec<kanmon_core::persist::Item>>,
+    persist_running: bool,
+    last_persist: Option<Instant>,
     pub print: bool,
 }
 
@@ -177,6 +182,7 @@ impl Monitor {
         };
         let known_resolvers = crate::dnswatch::read_resolvers(&cfg.dns.resolv_conf);
         let (doh_tx, doh_rx) = std::sync::mpsc::channel();
+        let (persist_tx, persist_rx) = std::sync::mpsc::channel();
         Ok(Self {
             host,
             os,
@@ -218,6 +224,10 @@ impl Monitor {
             dns_emitted: HashMap::new(),
             volume: Default::default(),
             last_volume: None,
+            persist_tx,
+            persist_rx,
+            persist_running: false,
+            last_persist: None,
             print: false,
             cfg,
         })
@@ -363,6 +373,29 @@ impl Monitor {
                 self.dns_check();
             }
             self.drain_doh();
+        }
+        // 居座りの走査（別スレッドで歩き、結果を前回と比べる）
+        if self.cfg.persistence.enabled {
+            let iv = Duration::from_secs(self.cfg.persistence.interval_s.max(1));
+            if !self.persist_running && self.last_persist.is_none_or(|t| t.elapsed() > iv) {
+                self.last_persist = Some(Instant::now());
+                self.persist_running = true;
+                let pc = self.cfg.persistence.clone();
+                let os = self.os;
+                let tx = self.persist_tx.clone();
+                let r = std::thread::Builder::new().name("kanmon-persist".into()).spawn(move || {
+                    let homes = crate::persistwatch::user_homes();
+                    let roots = crate::persistwatch::expand_roots(&pc.roots, &homes);
+                    let _ = tx.send(kanmon_core::persist::scan(&roots, &homes, os, pc.system, pc.max_depth));
+                });
+                if r.is_err() {
+                    self.persist_running = false;
+                }
+            }
+            if let Ok(items) = self.persist_rx.try_recv() {
+                self.persist_running = false;
+                self.persist_result(items);
+            }
         }
         // 状態ソケット用の集計（1 分ごと）
         if self.last_counts.elapsed() > Duration::from_secs(60) {
@@ -963,6 +996,77 @@ impl Monitor {
             }
         }
         self.known_resolvers = known;
+    }
+
+    /// 居座りの走査結果を前回と比べ、変化をイベントにする（初回は基準を記録するだけ）
+    fn persist_result(&mut self, items: Vec<kanmon_core::persist::Item>) {
+        use kanmon_core::persist;
+        let old: Option<Vec<persist::Item>> =
+            self.store.meta_get("persist.snapshot").ok().flatten().and_then(|s| serde_json::from_str(&s).ok());
+        if let Ok(s) = serde_json::to_string(&items) {
+            let _ = self.store.meta_set("persist.snapshot", &s);
+        }
+        let Some(old) = old else {
+            crate::logln!("居座りの走査：基準を記録しました（{} 件）", items.len());
+            return;
+        };
+        let changes = persist::diff(&old, &items);
+        if changes.is_empty() {
+            return;
+        }
+        crate::logln!("居座りの走査：{} 件の変化", changes.len());
+        // 一度に大量に変わった（走査の場所を変えた等）ときは、最初の 50 件だけイベントにする
+        for c in changes.iter().take(50) {
+            if let Err(e) = self.emit_persist(c) {
+                crate::logln!("居座りのイベントを保存できません: {e:#}");
+            }
+        }
+    }
+
+    fn emit_persist(&mut self, c: &kanmon_core::persist::Change) -> Result<()> {
+        let now = Utc::now().timestamp();
+        let learning = self.learning();
+        let mut e = Event {
+            timestamp: Local::now().to_rfc3339_opts(SecondsFormat::Millis, false),
+            event: ev::EventMeta {
+                id: self.next_id(),
+                kind: "alert".into(),
+                action: format!("persistence_{}", c.change),
+                outcome: None,
+            },
+            host: ev::Host { name: self.host.clone(), os: self.os.into() },
+            network: ev::Network {
+                kind: "persistence".into(),
+                direction: "none".into(),
+                transport: "file".into(),
+                scope: None,
+            },
+            file: Some(ev::File { path: c.item.path.clone() }),
+            ..Default::default()
+        };
+        e.kanmon.mode = if learning { "learning".into() } else { self.cfg.mode.clone() };
+        e.kanmon.learning = learning;
+        e.kanmon.persist = Some(ev::PersistFacts {
+            kind: c.item.kind.clone(),
+            change: c.change.clone(),
+            detail: c.item.detail.clone(),
+            risky: c.item.risky.clone(),
+        });
+        let mut v = serde_json::to_value(&e)?;
+        let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);
+        self.store.insert_event(&v, now)?;
+        self.jsonl.write(&v)?;
+        if self.print {
+            println!("{}", serde_json::to_string(&v)?);
+        }
+        let (title, body) = kanmon_core::format::alert_text(&v);
+        self.record_alert(&v, out.level, out.score, "persistence", &title, &body);
+        let min = self.min_notify_level();
+        self.notifier.send(
+            Message { level: out.level, title, body, dedup_key: format!("persist|{}|{}", c.change, c.item.key()) },
+            min,
+        );
+        Ok(())
     }
 
     /// DNS の改ざん検知イベントを作って評価・保存・通知する（同じ内容は 1 時間に 1 回）

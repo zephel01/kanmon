@@ -25,6 +25,7 @@ mod identity;
 mod logfile;
 mod monitor;
 mod notify;
+mod persistwatch;
 mod procinfo;
 mod sockets;
 mod status;

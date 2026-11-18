@@ -45,6 +45,28 @@ pub struct Config {
     pub dns: DnsCfg,
     /// 送信量（プロセス × 宛先）の集計と報告
     pub volume: VolumeCfg,
+    /// 居座り（開発ツールの設定・自動起動への仕込み）の走査
+    pub persistence: PersistCfg,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PersistCfg {
+    pub enabled: bool,
+    /// 走査するプロジェクトのディレクトリ。`~/` はログイン中のユーザーのホーム
+    pub roots: Vec<String>,
+    /// 走査の間隔（秒）
+    pub interval_s: u64,
+    /// プロジェクトのディレクトリを潜る深さ
+    pub max_depth: usize,
+    /// /Library/LaunchDaemons・/etc/systemd/system 等、システム全体の自動起動も見る
+    pub system: bool,
+}
+
+impl Default for PersistCfg {
+    fn default() -> Self {
+        Self { enabled: true, roots: vec!["~/kanmon-work".into()], interval_s: 3600, max_depth: 6, system: true }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -301,6 +323,7 @@ impl Default for Config {
             dns: DnsCfg::default(),
             volume: VolumeCfg::default(),
             log: LogCfg::default(),
+            persistence: PersistCfg::default(),
         }
     }
 }

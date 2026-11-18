@@ -54,7 +54,7 @@ detections:
 ## 参照できるフィールド
 | フィールド | 内容 |
 |---|---|
-| `network.kind` / `direction` / `transport` / `scope` | 種別（connect / accept / listen / raw_socket / beacon_report / dns_integrity / bytes_report）、方向、tcp / udp / raw / packet / dns、loopback / lan / internet / all |
+| `network.kind` / `direction` / `transport` / `scope` | 種別（connect / accept / listen / raw_socket / beacon_report / dns_integrity / bytes_report / persistence）、方向、tcp / udp / raw / packet / dns、loopback / lan / internet / all |
 | `process.executable` / `name` / `args` / `user` / `uid` | 実行ファイル、引数、ユーザー |
 | `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / adhoc / unsigned / package / unmanaged / unknown |
 | `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
@@ -74,6 +74,7 @@ detections:
 | `kanmon.dga_score` | 自動生成ドメインらしさ（0〜1、ドメインがあるときだけ） |
 | `kanmon.beacon.score` / `n` / `median_interval_s` / `mad_s` | ビーコン（`beacon_report` のみ） |
 | `kanmon.bytes.out` / `window_s` | 1 つの宛先へ窓（既定 10 分）の間に送ったバイト数（`bytes_report` のみ） |
+| `kanmon.persist.kind` / `change` / `detail` / `risky` | 居座りの種類（claude_hook / vscode_folderopen / pth_exec / workflow / git_hook / autostart / rc_pipe）、added / changed / removed、中身の要約、怪しい特徴（network / pipe_shell / inline_code / base64 / tmp_path）（`persistence` のみ） |
 | `kanmon.bytes.open_paths` / `open_exts` / `open_size` / `out_per_open` | 報告の瞬間に開いていた通常ファイルのパス・拡張子・合計容量、送信量 ÷ 合計容量 |
 
 ## 同梱ルール
@@ -134,6 +135,18 @@ detections:
 | V9 | モデル・データ（GGUF・safetensors 等）を登録済みの置き場（Hugging Face 等）へ上げている | −40 |
 
 正当な置き場は `upload_ok` に足す。開いているファイルは報告の瞬間のもので、送信前に閉じたファイルは見えない。
+
+### 居座り（`60-persistence.yaml`）
+イベントの `network.kind` は `persistence`。kanmond が 1 時間ごとに読むだけの走査をし、前回からの追加・変更を評価する（初回は基準の記録だけ）。
+
+| ID | 内容 | 点 |
+|---|---|---|
+| P1 / P2 | Claude Code のフック / VS Code の folderOpen タスクが追加された | +40 / +40 |
+| P3 | Python の `.pth` に import 行（起動のたびに実行）が追加された | +50 |
+| P4 | GitHub Actions のワークフローが追加・変更された（記録のみ） | +10 |
+| P5 / P6 | Git のフック / 自動起動（LaunchAgents・systemd 等）が追加・変更された | +30 / +30 |
+| P7 | シェルの設定に、ダウンロードしてそのまま実行する行が追加された | +60 |
+| PR / PRt | 中身にダウンロード・パイプでの実行・インラインのコード・base64 / 一時フォルダの参照がある | +40 / +20 |
 
 監視リスト（`dns.watch_domains`）の既定値は、パッケージ配布元（npm・PyPI・crates.io 等）、GitHub、Hugging Face、AI ベンダーの API、主要なログイン画面です。
 

@@ -90,3 +90,13 @@ interval_s = 10
 window_s = 600
 min_report_kb = 1024
 report_every_min = 30
+
+# 居座り（開発ツールの設定・自動起動への仕込み）の走査。読むだけで、実行・変更はしない
+[persistence]
+enabled = true
+# ~/ はログイン中のユーザーのホーム。node_modules・target 等は潜らない
+roots = ["~/kanmon-work"]
+interval_s = 3600
+max_depth = 6
+# /Library/LaunchDaemons・/etc/systemd/system 等、システム全体の自動起動も見る
+system = true
