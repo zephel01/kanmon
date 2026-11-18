@@ -10,8 +10,10 @@ SRC="build/Kanmon.app"
 DEST="/Applications/Kanmon.app"
 LABEL="com.kanmon.bar"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+# shellcheck source=../packaging/launchd-lib.sh
+. ../packaging/launchd-lib.sh
 
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+launchd_stop "gui/$(id -u)" "$LABEL"
 pkill -x KanmonBar 2>/dev/null || true
 rm -rf "$DEST"
 ditto "$SRC" "$DEST"
@@ -32,5 +34,5 @@ cat > "$PLIST" <<PL
 </dict>
 </plist>
 PL
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+launchd_start "gui/$(id -u)" "$LABEL" "$PLIST" KanmonBar
 echo "導入完了：メニューバーに盾のアイコンが出ます。止めるには launchctl bootout gui/$(id -u)/$LABEL"

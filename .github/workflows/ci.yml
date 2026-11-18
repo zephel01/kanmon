@@ -19,6 +19,11 @@ jobs:
       - name: libpcap（DNS・SNI の観測に使う）
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: 導入スクリプト（launchd の入れ替え）の確認
+        if: runner.os == 'Linux'
+        run: |
+          shellcheck -x -S warning packaging/launchd-lib.sh packaging/install-macos.sh macos/install-app.sh tests/harness/launchd_lib_test.sh
+          tests/harness/launchd_lib_test.sh
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace

@@ -50,6 +50,11 @@ Linux は `sudo packaging/install-linux.sh`。どちらも、動いている古�
 | 起動 | `sudo launchctl bootstrap system /Library/LaunchDaemons/com.kanmon.kanmond.plist` | `sudo systemctl start kanmond` |
 | ログ | `/Library/Logs/kanmon/kanmond.log`（前の日は `kanmond.YYYY-MM-DD.log`。起動直後の失敗は `kanmond.stderr.log`） | `journalctl -u kanmond` |
 
+### うまく起動しないとき（macOS）
+- メニューが「kanmond が応答しません」：`pgrep -lx kanmond` でプロセスを確認。無ければ `sudo launchctl print system/com.kanmon.kanmond` で登録を確認する
+- `Bootstrap failed: 5: Input/output error`：すでに登録済みのことが多い。`sudo launchctl kickstart -k system/com.kanmon.kanmond` で再起動する。登録されていないのにこのエラーになる場合は、システム設定 → 一般 → ログイン項目と機能拡張 で、バックグラウンドでの実行が許可されているかを見る
+- 起動直後に落ちる：`/Library/Logs/kanmon/kanmond.stderr.log` を見る
+
 ### Kanmon.app（メニューバー、macOS）
 | 操作 | コマンド |
 |---|---|
