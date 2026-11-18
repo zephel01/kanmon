@@ -76,6 +76,7 @@ pub fn parse_codesign(text: &str) -> Identity {
 }
 
 /// `dpkg-query -S` の出力 `pkg:arch: /path` → `pkg`
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn parse_dpkg_s(text: &str) -> Option<String> {
     let line = text.lines().find(|l| !l.starts_with("diversion"))?;
     let (pkgs, _) = line.split_once(": ")?;
