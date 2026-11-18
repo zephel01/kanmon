@@ -2,6 +2,13 @@
 # kanmond が一定間隔（既定 1 時間）で読むだけの走査をし、前回からの「追加・変更」を評価する（初回は基準の記録だけ）。
 # 自分で設定を変えたときにも出るので、心当たりがあれば無視してよい。怪しい特徴（ダウンロード・パイプでの実行等）が
 # 付くと重くなる。
+lists:
+  # .pth の import でよく見るモジュール（virtualenv・setuptools・editable install・coverage 等）。
+  # ここに無いモジュールを読み込む .pth が増えたら P3u で重くする。自分の環境で普通に出るものは足してよい
+  pth_known: [_virtualenv, _distutils_hack, __editable__, _editable_impl_, coverage, sys, os, site, distutils,
+              pywin32_bootstrap, _pytest, setuptools, pkg_resources, google, zope, ruamel, sphinxcontrib, jaraco,
+              backports, mpl_toolkits, azure, protobuf, _virtualenv_pth]
+
 detections:
   - id: P1
     name: claude_hook_added
@@ -32,6 +39,19 @@ detections:
       all:
         - { field: kanmon.persist.kind, op: eq, value: pth_exec }
         - { field: kanmon.persist.change, op: eq, value: added }
+
+  - id: P3u
+    name: pth_unknown_module
+    points: 20
+    # P3 に重ねる。2026-11 の agent-framework は `import agent_framework_meta` だけの .pth で、
+    # 怪しい特徴（URL・base64 等）が付かなかった
+    description: .pth が、よく見る種類ではないモジュールを Python の起動のたびに読み込むようになった
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: pth_exec }
+        - { field: kanmon.persist.change, op: eq, value: added }
+        - not: { field: kanmon.persist.module, op: in, value: "@pth_known" }
 
   - id: P4
     name: workflow_changed
@@ -93,3 +113,27 @@ detections:
       all:
         - { field: kanmon.persist.change, op: in, value: [added, changed] }
         - { field: kanmon.persist.risky, op: in, value: [tmp_path] }
+
+  - id: PW1
+    name: workflow_secrets_dump
+    points: 50
+    # 2026-11 のワークフロー注入（盗んだ GitHub の認証で数万のリポジトリへ）は、シークレットをまとめて取り出した
+    description: GitHub Actions のワークフローに、シークレットをまとめて取り出す形（toJSON(secrets)）が入った
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: workflow }
+        - { field: kanmon.persist.change, op: in, value: [added, changed] }
+        - { field: kanmon.persist.risky, op: in, value: [secrets_dump] }
+
+  - id: PW2
+    name: workflow_secrets_send
+    points: 20
+    # デプロイの Webhook 等で普通にもある形なので軽め
+    description: GitHub Actions のワークフローに、シークレットを外へ送る形、またはクラウドの一時認証を直接取る形が入った
+    kinds: [persistence]
+    when:
+      all:
+        - { field: kanmon.persist.kind, op: eq, value: workflow }
+        - { field: kanmon.persist.change, op: in, value: [added, changed] }
+        - { field: kanmon.persist.risky, op: in, value: [secrets_send, oidc_token] }

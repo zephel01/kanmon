@@ -1,0 +1,30 @@
+# 2 段階の結び付け：起動のたびに動く仕掛けが増えた（居座りの走査）あと、24 時間以内に
+# スクリプトの実行環境が初めての宛先へ送った。盗む処理は「勝手に動き出す → 外へ送る」を省けないので、
+# 名前や宛先を変えられても、この並びは残る。
+# kanmon.persist_recent は kanmond が通信のイベントに付ける（期間は [persistence] recent_window_s）。
+detections:
+  - id: C1
+    name: pth_then_new_destination
+    points: 30
+    description: Python の起動の仕掛け（.pth）が増えたあと、Python が初めての宛先へ通信
+    kinds: [connect]
+    when:
+      all:
+        - { field: kanmon.persist_recent, op: in, value: [pth_exec] }
+        - { field: process.name, op: prefix, value: python, ci: true }
+        - { field: kanmon.dest_first_for_process, op: eq, value: true }
+        - { field: network.scope, op: eq, value: internet }
+
+  - id: C2
+    name: hook_then_new_destination
+    points: 25
+    description: フック・自動起動などの仕掛けが増えたあと、スクリプトが初めての宛先へ通信
+    kinds: [connect]
+    when:
+      all:
+        - { field: kanmon.persist_recent, op: in, value: [claude_hook, vscode_folderopen, git_hook, rc_pipe, autostart] }
+        - any:
+            - { field: process.name, op: in, value: "@scripting", ci: true }
+            - { field: process.interpreter, op: eq, value: true }
+        - { field: kanmon.dest_first_for_process, op: eq, value: true }
+        - { field: network.scope, op: eq, value: internet }

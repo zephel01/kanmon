@@ -43,6 +43,14 @@ lists:
                 datadoghq.com, npmjs.org]
   scripting:
     [node, bun, deno, python, python2, python3, ruby, perl, php, osascript, sh, bash, zsh, dash, pwsh, powershell]
+  # ブロックチェーンの公開 RPC（登録ドメイン）。C2 の連絡先を置き場から読む手口（ChainDrop・keyv 等）で使われた。
+  # 正規の基盤なので、ブラウザ・ウォレット以外からの通信だけを見る
+  chain_rpc: [llamarpc.com, getblock.io, nodereal.io, infura.io, alchemy.com, publicnode.com, ankr.com,
+              cloudflare-eth.com, blockscout.com, ic0.app, icp-api.io]
+  # 登録ドメインが取れないもの（ICP の canister は `<id>.raw.icp0.io` 等）はドメインの末尾で見る
+  chain_rpc_suffixes: [.icp0.io, .ic0.app, .icp-api.io]
+  # ブロックチェーンに繋ぐのが仕事のアプリ（対象外）
+  chain_apps: [ledger live, exodus, trezor suite, electrum, rabby, frame, geth, anvil, cast, forge, metamask]
 
 detections:
   - id: D1
@@ -200,3 +208,52 @@ detections:
         - { field: process.name, op: in, value: "@ai_clis", ci: true }
         - { field: destination.registered_domain, op: exists }
         - { field: destination.registered_domain, op: not_in, value: "@ai_official", ci: true }
+
+  - id: D9s
+    name: exfil_service_from_script
+    points: 30
+    # D9 に重ねる。スクリプトの実行環境やパッケージの導入処理から送るのは、ほぼ持ち出し
+    # （2026-11 の agent-framework は Python の起動時に webhook.site へ送った）
+    description: スクリプト（Python・node 等）やパッケージの導入処理が、盗んだ情報の置き場に使われやすいサービスへ通信
+    kinds: [connect]
+    when:
+      all:
+        - { field: destination.registered_domain, op: in, value: "@exfil_services", ci: true }
+        - any:
+            - { field: process.name, op: in, value: "@scripting", ci: true }
+            - { field: process.name, op: prefix, value: python, ci: true }
+            - { field: process.interpreter, op: eq, value: true }
+            - { field: process.parent_chain, op: in, value: "@pkg_managers", ci: true }
+
+  - id: D12
+    name: chain_rpc
+    points: 30
+    description: ブラウザ・ウォレット以外が、ブロックチェーンの公開 RPC へ通信（C2 の連絡先を読む手口で使われる）
+    kinds: [connect]
+    when:
+      all:
+        - any:
+            - { field: destination.registered_domain, op: in, value: "@chain_rpc", ci: true }
+            - { field: destination.domain, op: suffix, value: "@chain_rpc_suffixes", ci: true }
+        - not:
+            any:
+              - { field: process.name, op: in, value: "@browsers", ci: true }
+              - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
+              - { field: process.name, op: in, value: "@chain_apps", ci: true }
+
+  - id: D12s
+    name: chain_rpc_from_script
+    points: 30
+    # D12 に重ねる
+    description: スクリプトやパッケージの導入処理が、ブロックチェーンの公開 RPC へ通信
+    kinds: [connect]
+    when:
+      all:
+        - any:
+            - { field: destination.registered_domain, op: in, value: "@chain_rpc", ci: true }
+            - { field: destination.domain, op: suffix, value: "@chain_rpc_suffixes", ci: true }
+        - any:
+            - { field: process.name, op: in, value: "@scripting", ci: true }
+            - { field: process.name, op: prefix, value: python, ci: true }
+            - { field: process.interpreter, op: eq, value: true }
+            - { field: process.parent_chain, op: in, value: "@pkg_managers", ci: true }

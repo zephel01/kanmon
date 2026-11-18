@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "kanmon-core"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "kanmonctl"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "kanmond"
-version = "0.2.5"
+version = "0.2.6"
 dependencies = [
  "anyhow",
  "chrono",

@@ -27,7 +27,8 @@
 | `[dns] crosscheck` / `doh_url` | true / Cloudflare | 監視リストのドメインを DoH で引き直して照合する。外へ問い合わせるのは監視リストのドメインだけで、同じドメインは 30 分に 1 回まで。https のみ |
 | `[dns] watch_domains` | パッケージ配布元・GitHub・AI ベンダー等 | 書き換え・食い違いを重く見るドメイン（サブドメインも含む） |
 | `[volume] interval_s` / `window_s` / `min_report_kb` | 10 / 600 / 1024 | 送信量を読む間隔、合計する窓（秒）、報告する最小量（KB）。macOS は nettop、Linux は sock_diag で読む |
-| `[persistence] roots` / `interval_s` / `max_depth` / `system` | `["~/kanmon-work"]` / 3600 / 6 / true | 居座りの走査。`~/` はログイン中のユーザーのホーム。`node_modules` 等は潜らない。初回は基準の記録だけで、以後は追加・変更をイベントにする |
+| `[persistence] roots` / `interval_s` / `max_depth` / `system` | `["~/kanmon-work"]` / 3600 / 6 / true | 居座りの走査。`~/` はログイン中のユーザーのホーム。`node_modules` 等は潜らない。初回は基準の記録だけで、以後は追加・変更をイベントにする。`system` はシステム全体の自動起動とシステムの Python も見る |
+| `[persistence] watch_s` / `recent_window_s` | 60 / 86400 | site-packages の更新時刻を見る間隔（変わったら走査し直す。0 で無効）/ 仕掛けが増えてから通信と結び付けて見る期間 |
 | `[jsonl] rotate` / `keep_days` | `size` / 30 | `daily` にすると `events.YYYY-MM-DD.jsonl` に日付ごとに切り替え、`keep_days` 日残す（同じ日に `max_mb` を超えたら番号付き） |
 | `[log] path` / `keep_days` | macOS `/Library/Logs/kanmon/kanmond.log`、Linux 空（journald） / 14 | kanmond の動作ログ。日付が変わると `kanmond.YYYY-MM-DD.log` に切り替え、`keep_days` 日残す |
 | `[dns] private_ok_suffixes` | 空 | プライベート IP に解決されても知らせない接尾辞（社内ドメイン等）。`.local`・`.test`・`ts.net` 等は最初から対象外 |
@@ -72,7 +73,7 @@ Linux は `sudo packaging/install-linux.sh`。どちらも、動いている古�
 | `kanmonctl beacon --min 0.5` | ビーコン（周期的な通信）の候補 |
 | `kanmonctl check --detections DIR [--extra FILE]` | 検知ルールの検証 |
 | `kanmonctl replay --events FILE --detections DIR [--only ID]` | 過去ログに検知ルールを当て直す |
-| `kanmonctl scan [--root DIR] [--system] [--risky] [--json]` | 居座りの走査（Claude Code のフック、VS Code の folderOpen、`.pth`、Git のフック、自動起動等）。読むだけ。既定は `~/kanmon-work`。`sudo` 不要 |
+| `kanmonctl scan [--root DIR] [--system] [--risky] [--kind KIND] [--json]` | 居座りの走査（Claude Code のフック、VS Code の folderOpen、`.pth`、Git のフック、自動起動等）。読むだけ。既定は `~/kanmon-work`。`--kind pth_exec` で Python の起動のたびに動く `.pth` の import 行だけを、システムの Python も含めて一覧にする（読み込むモジュール名つき）。`sudo` 不要 |
 
 ログは root 専用なので、通常は `sudo` を付けて実行します。netmon 時代のログ（`netmon.*` 欄）も自動で読み替えます。
 

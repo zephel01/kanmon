@@ -278,6 +278,10 @@ pub struct KanmonInfo {
     pub bytes: Option<BytesFacts>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub persist: Option<PersistFacts>,
+    /// 直近（既定 24 時間）に、起動のたびに動く仕掛けが追加・変更された種類（pth_exec・claude_hook 等）。
+    /// 通信のイベントに付け、「仕込み → 外へ送る」の 2 段階を結び付けて評価する
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub persist_recent: Vec<String>,
 }
 
 /// 居座りの検知（`network.kind = persistence`）の事実（`kanmon.persist.*`）
@@ -289,9 +293,12 @@ pub struct PersistFacts {
     pub change: String,
     /// 中身の要約（フックのコマンド等）
     pub detail: String,
-    /// network / pipe_shell / inline_code / base64 / tmp_path
+    /// network / pipe_shell / inline_code / base64 / tmp_path（workflow は secrets_dump / secrets_send / oidc_token）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub risky: Vec<String>,
+    /// pth_exec のとき、最初に読み込むモジュールのトップレベル名
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
 }
 
 /// 送信量の報告（`network.kind = bytes_report`）の事実（`kanmon.bytes.*`）

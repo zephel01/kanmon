@@ -74,7 +74,9 @@ detections:
 | `kanmon.dga_score` | 自動生成ドメインらしさ（0〜1、ドメインがあるときだけ） |
 | `kanmon.beacon.score` / `n` / `median_interval_s` / `mad_s` | ビーコン（`beacon_report` のみ） |
 | `kanmon.bytes.out` / `window_s` | 1 つの宛先へ窓（既定 10 分）の間に送ったバイト数（`bytes_report` のみ） |
-| `kanmon.persist.kind` / `change` / `detail` / `risky` | 居座りの種類（claude_hook / vscode_folderopen / pth_exec / workflow / git_hook / autostart / rc_pipe）、added / changed / removed、中身の要約、怪しい特徴（network / pipe_shell / inline_code / base64 / tmp_path）（`persistence` のみ） |
+| `kanmon.persist.kind` / `change` / `detail` / `risky` | 居座りの種類（claude_hook / vscode_folderopen / pth_exec / workflow / git_hook / autostart / rc_pipe）、added / changed / removed、中身の要約、怪しい特徴（network / pipe_shell / inline_code / base64 / tmp_path。workflow は secrets_dump / secrets_send / oidc_token）（`persistence` のみ） |
+| `kanmon.persist.module` | `.pth` が最初に読み込むモジュールのトップレベル名（`persistence` の pth_exec のみ） |
+| `kanmon.persist_recent` | 直近（既定 24 時間）に、起動のたびに動く仕掛けが追加・変更された種類（pth_exec・claude_hook・vscode_folderopen・git_hook・rc_pipe・autostart）。通信のイベント（`connect`）に付く |
 | `kanmon.bytes.open_paths` / `open_exts` / `open_size` / `out_per_open` | 報告の瞬間に開いていた通常ファイルのパス・拡張子・合計容量、送信量 ÷ 合計容量 |
 
 ## 同梱ルール
@@ -108,6 +110,8 @@ detections:
 | D9 | ブラウザ以外が、ペーストサイト・Webhook 受け口など盗んだ情報の置き場に使われやすいサービスへ通信 | +30 |
 | D10 | パッケージ導入処理の配下から GitHub の書き込み口（API・Gist）へ通信 | +20 |
 | D11 | AI コーディング CLI（claude・codex・grok 等）が公式以外の宛先へ通信 | +30 |
+| D9s | D9 に重ねる：送ったのがスクリプト（Python・node 等）かパッケージ導入処理の配下 | +30 |
+| D12 / D12s | ブラウザ・ウォレット以外がブロックチェーンの公開 RPC（Ethereum・ICP 等。C2 の連絡先の置き場に使われる）へ通信 / それがスクリプトかパッケージ導入処理の配下 | +30 / +30 |
 
 ### DNS の改ざん検知（`25-dns.yaml`）
 イベントの `network.kind` は `dns_integrity`。hosts と DNS サーバー設定は読むだけで、書き換えません。
@@ -147,6 +151,20 @@ detections:
 | P5 / P6 | Git のフック / 自動起動（LaunchAgents・systemd 等）が追加・変更された | +30 / +30 |
 | P7 | シェルの設定に、ダウンロードしてそのまま実行する行が追加された | +60 |
 | PR / PRt | 中身にダウンロード・パイプでの実行・インラインのコード・base64 / 一時フォルダの参照がある | +40 / +20 |
+| P3u | P3 に重ねる：よく見る種類（`pth_known`）ではないモジュールを読み込む `.pth` | +20 |
+| PW1 / PW2 | ワークフローに `toJSON(secrets)` / シークレットを外へ送る形・クラウドの一時認証を直接取る形が入った | +50 / +20 |
+
+`.pth` は、プロジェクトの仮想環境（`.venv` 等）、`pip install --user`、`~/.venv`、pyenv・uv・pipx・conda・poetry の環境、`system = true` のときはシステムの Python（Homebrew・python.org・ディストリの dist-packages）も見る。site-packages の更新時刻を 1 分ごとに確かめ、変わったら 1 時間を待たずに走査し直す（`[persistence] watch_s`）。
+
+### 2 段階の結び付け（`65-chain.yaml`）
+盗む処理は「勝手に動き出す → 外へ送る」を省けない。起動のたびに動く仕掛けが増えたあと（`kanmon.persist_recent`）、スクリプトの実行環境が初めての宛先へ送ったら重くする。
+
+| ID | 内容 | 点 |
+|---|---|---|
+| C1 | `.pth` が増えたあと、Python が初めての宛先へ通信 | +30 |
+| C2 | フック・folderOpen・Git のフック・rc・自動起動が増えたあと、スクリプトが初めての宛先へ通信 | +25 |
+
+結び付ける期間は `[persistence] recent_window_s`（既定 24 時間）。Python 環境やプロジェクトの単位では結び付けず、種類の単位で見る（venv の python は実体の実行ファイルに解決されるため）。
 
 監視リスト（`dns.watch_domains`）の既定値は、パッケージ配布元（npm・PyPI・crates.io 等）、GitHub、Hugging Face、AI ベンダーの API、主要なログイン画面です。
 
