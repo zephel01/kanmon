@@ -21,7 +21,7 @@ use kanmon_core::store::{ProcRow, Store};
 use kanmon_core::{beacon, netclass};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
@@ -76,11 +76,24 @@ pub struct Monitor {
     volume: kanmon_core::volume::VolumeTracker,
     last_volume: Option<Instant>,
     // ---- 居座りの走査（別スレッド）
-    persist_tx: Sender<Vec<kanmon_core::persist::Item>>,
-    persist_rx: Receiver<Vec<kanmon_core::persist::Item>>,
+    persist_tx: Sender<PersistScan>,
+    persist_rx: Receiver<PersistScan>,
     persist_running: bool,
     last_persist: Option<Instant>,
+    /// 直近に増えた起動の仕掛け（通信と結び付ける）
+    persist_recent: Vec<kanmon_core::persist::Recent>,
+    /// 見張る site-packages と、その更新時刻（.pth の追加に早く気づくため）
+    persist_sites: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+    last_site_check: Instant,
     pub print: bool,
+}
+
+/// 居座りの走査の結果（見つけたもの, 見た site-packages）
+type PersistScan = (Vec<kanmon_core::persist::Item>, Vec<PathBuf>);
+
+/// ディレクトリの更新時刻（読めなければ None）
+fn dir_mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(p).and_then(|m| m.modified()).ok()
 }
 
 /// （ドメイン, 受け身で見た答え, DoH と証明書の確認結果）
@@ -183,6 +196,12 @@ impl Monitor {
         let known_resolvers = crate::dnswatch::read_resolvers(&cfg.dns.resolv_conf);
         let (doh_tx, doh_rx) = std::sync::mpsc::channel();
         let (persist_tx, persist_rx) = std::sync::mpsc::channel();
+        let persist_recent: Vec<kanmon_core::persist::Recent> = store
+            .meta_get("persist.recent")
+            .ok()
+            .flatten()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
         Ok(Self {
             host,
             os,
@@ -228,6 +247,9 @@ impl Monitor {
             persist_rx,
             persist_running: false,
             last_persist: None,
+            persist_recent,
+            persist_sites: vec![],
+            last_site_check: Instant::now(),
             print: false,
             cfg,
         })
@@ -377,6 +399,19 @@ impl Monitor {
         // 居座りの走査（別スレッドで歩き、結果を前回と比べる）
         if self.cfg.persistence.enabled {
             let iv = Duration::from_secs(self.cfg.persistence.interval_s.max(1));
+            // site-packages の更新時刻が変わったら（pip install 等）、間隔を待たずに走査し直す（最短 2 分おき）
+            let watch = Duration::from_secs(self.cfg.persistence.watch_s.max(10));
+            if self.cfg.persistence.watch_s > 0 && self.last_site_check.elapsed() > watch {
+                self.last_site_check = Instant::now();
+                let changed = self.persist_sites.iter().any(|(p, t)| dir_mtime(p) != *t);
+                if changed
+                    && !self.persist_running
+                    && self.last_persist.is_some_and(|t| t.elapsed() > Duration::from_secs(120))
+                {
+                    crate::logln!("居座りの走査：site-packages が変わったので走査し直します");
+                    self.last_persist = None;
+                }
+            }
             if !self.persist_running && self.last_persist.is_none_or(|t| t.elapsed() > iv) {
                 self.last_persist = Some(Instant::now());
                 self.persist_running = true;
@@ -386,14 +421,21 @@ impl Monitor {
                 let r = std::thread::Builder::new().name("kanmon-persist".into()).spawn(move || {
                     let homes = crate::persistwatch::user_homes();
                     let roots = crate::persistwatch::expand_roots(&pc.roots, &homes);
-                    let _ = tx.send(kanmon_core::persist::scan(&roots, &homes, os, pc.system, pc.max_depth));
+                    let _ = tx.send(kanmon_core::persist::scan_with_sites(&roots, &homes, os, pc.system, pc.max_depth));
                 });
                 if r.is_err() {
                     self.persist_running = false;
                 }
             }
-            if let Ok(items) = self.persist_rx.try_recv() {
+            if let Ok((items, sites)) = self.persist_rx.try_recv() {
                 self.persist_running = false;
+                self.persist_sites = sites
+                    .into_iter()
+                    .map(|p| {
+                        let t = dir_mtime(&p);
+                        (p, t)
+                    })
+                    .collect();
                 self.persist_result(items);
             }
         }
@@ -526,6 +568,11 @@ impl Monitor {
                     let port = s.remote.map(|r| r.port()).unwrap_or(0).to_string();
                     let first_port = self.store.baseline_touch(&proc_key, &port, "port", now_s)?;
                     e.kanmon.dest_first_for_process = first_dest && !learning && !initial;
+                    e.kanmon.persist_recent = kanmon_core::persist::recent_kinds(
+                        &self.persist_recent,
+                        now_s,
+                        self.cfg.persistence.recent_window_s as i64,
+                    );
                     e.kanmon.port_first_for_process = first_port && !learning && !initial;
                     if scope != "loopback" {
                         let ts = now.timestamp_millis() as f64 / 1000.0;
@@ -1006,13 +1053,25 @@ impl Monitor {
         if let Ok(s) = serde_json::to_string(&items) {
             let _ = self.store.meta_set("persist.snapshot", &s);
         }
+        let ver = persist::SCAN_VERSION.to_string();
+        let same_ver = self.store.meta_get("persist.scan_version").ok().flatten().as_deref() == Some(ver.as_str());
+        let _ = self.store.meta_set("persist.scan_version", &ver);
         let Some(old) = old else {
             crate::logln!("居座りの走査：基準を記録しました（{} 件）", items.len());
             return;
         };
+        if !same_ver {
+            crate::logln!("居座りの走査：見る場所が増えたので、基準を取り直しました（{} 件）", items.len());
+            return;
+        }
         let changes = persist::diff(&old, &items);
         if changes.is_empty() {
             return;
+        }
+        let now = Utc::now().timestamp();
+        persist::note_recent(&mut self.persist_recent, &changes, now, self.cfg.persistence.recent_window_s as i64);
+        if let Ok(s) = serde_json::to_string(&self.persist_recent) {
+            let _ = self.store.meta_set("persist.recent", &s);
         }
         crate::logln!("居座りの走査：{} 件の変化", changes.len());
         // 一度に大量に変わった（走査の場所を変えた等）ときは、最初の 50 件だけイベントにする
@@ -1051,6 +1110,7 @@ impl Monitor {
             change: c.change.clone(),
             detail: c.item.detail.clone(),
             risky: c.item.risky.clone(),
+            module: (c.item.kind == "pth_exec").then(|| kanmon_core::persist::pth_module(&c.item.detail)).flatten(),
         });
         let mut v = serde_json::to_value(&e)?;
         let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);

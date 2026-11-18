@@ -6,6 +6,23 @@
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-11-18
+2026-11-17 の agent-framework（PyPI、`.pth` で Python の起動のたびに認証情報を送る）と、ブロックチェーンを連絡先の置き場にする手口（keyv・ChainDrop・CanisterWorm）への対応。
+
+### 追加
+- **仕込みと送信の結び付け**（`detections/65-chain.yaml`、C1・C2）：起動のたびに動く仕掛け（`.pth`・フック・folderOpen・Git のフック・rc・自動起動）が増えたあと 24 時間以内に、スクリプトの実行環境が初めての宛先へ送ったら重くする。通信のイベントに `kanmon.persist_recent` を付ける（`[persistence] recent_window_s`）
+- **ブロックチェーンの公開 RPC**（D12・D12s、`chain_rpc`・`chain_rpc_suffixes`・`chain_apps`）：ブラウザ・ウォレット以外が Ethereum・ICP の公開 RPC へ繋いだら加点。スクリプトやパッケージ導入処理の配下ならさらに加点
+- **D9s**：盗んだ情報の置き場（webhook.site 等）への通信が、スクリプトかパッケージ導入処理の配下なら +30（D9 と合わせて警告）
+- **P3u**：よく見る種類（`pth_known`）ではないモジュールを読み込む `.pth` が増えたら +20（P3 と合わせて警告）。イベントに `kanmon.persist.module`
+- **PW1・PW2**：ワークフローに `toJSON(secrets)`（+50）/ シークレットを外へ送る形・`ACTIONS_ID_TOKEN_REQUEST_*` の直接利用（+20）が入ったら加点（2026-11 の盗んだ GitHub 認証によるワークフロー注入）
+- `.pth` を見る場所を追加：`~/.venv`、pyenv・uv（tools・python）・pipx・conda／miniforge・poetry の環境、`system = true` のときはシステムの Python（Homebrew・python.org の Framework・ディストリの dist-packages）
+- site-packages の更新時刻を 1 分ごとに確かめ、変わったら 1 時間を待たずに走査し直す（最短 2 分おき、`[persistence] watch_s`）
+- `kanmonctl scan --kind <種類>`：種類で絞る。`--kind pth_exec` はシステムの Python も見て、読み込むモジュール名を添える
+
+### 変更
+- 走査の範囲を広げたので、更新後の最初の走査は差分を出さずに基準を取り直す（新しく見る場所のものがまとめて「追加」と出ないように）
+
+
 ## [0.2.5] - 2026-11-18
 居座り（開発ツールの設定・自動起動への仕込み）の検知。
 

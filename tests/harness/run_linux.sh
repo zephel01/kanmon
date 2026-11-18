@@ -203,6 +203,13 @@ cat > "$W/work/app/.vscode/tasks.json" <<'JS'
 }
 JS
 
+echo "[O] 仮想環境に .pth を仕込み（P3・P3u）、そのあと python が初めての宛先へ（C1）"
+mkdir -p "$W/work/app/.venv/lib/python3.12/site-packages" "$W/bin"
+echo "import harness_meta" > "$W/work/app/.venv/lib/python3.12/site-packages/harness_meta.pth"
+cp "$W/netclient" "$W/bin/python3"
+sleep 4  # 走査（interval_s = 2）で .pth の追加を拾うのを待つ
+"$W/bin/python3" 203.0.113.70 443 1 0 1500
+
 echo "[E] 疑似ビーコン：1 秒周期 × 10 回（S7）"
 "$W/netclient" 203.0.113.20 443 10 1000 500
 sleep 12  # ビーコン集計を待つ
@@ -292,6 +299,11 @@ p1 = find(lambda e: e["network"]["kind"] == "persistence" and e["kanmon"]["persi
 check("N: Claude のフックの追加に P1+PR、warn", p1 and {"P1","PR"} <= sig(p1[0]) and p1[0]["kanmon"]["level"] == "warn")
 p2 = find(lambda e: e["network"]["kind"] == "persistence" and e["kanmon"]["persist"]["kind"] == "vscode_folderopen")
 check("N: VS Code の folderOpen に P2+PR（コメント付き JSON を読める）", p2 and {"P2","PR"} <= sig(p2[0]))
+p3 = find(lambda e: e["network"]["kind"] == "persistence" and e["kanmon"]["persist"]["kind"] == "pth_exec")
+check("O: .pth の追加に P3+P3u、warn、読み込むモジュール名", p3 and {"P3","P3u"} <= sig(p3[0]) and p3[0]["kanmon"]["level"] == "warn"
+      and p3[0]["kanmon"]["persist"].get("module") == "harness_meta")
+c1 = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "203.0.113.70")
+check("O: .pth の追加後、python の初めての宛先に C1", c1 and "C1" in sig(c1[0]) and "pth_exec" in c1[0]["kanmon"].get("persist_recent", []))
 print("RESULT:", "OK" if ok else "NG")
 sys.exit(0 if ok else 1)
 PY

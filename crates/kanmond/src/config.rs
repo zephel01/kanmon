@@ -59,13 +59,26 @@ pub struct PersistCfg {
     pub interval_s: u64,
     /// プロジェクトのディレクトリを潜る深さ
     pub max_depth: usize,
-    /// /Library/LaunchDaemons・/etc/systemd/system 等、システム全体の自動起動も見る
+    /// /Library/LaunchDaemons・/etc/systemd/system 等、システム全体の自動起動と、
+    /// システムの Python（Homebrew 等）の site-packages も見る
     pub system: bool,
+    /// site-packages の更新時刻を見る間隔（秒）。変わったら間隔を待たずに走査し直す。0 で無効
+    pub watch_s: u64,
+    /// 起動の仕掛けが増えてから、そのあとの通信と結び付けて見る期間（秒）
+    pub recent_window_s: u64,
 }
 
 impl Default for PersistCfg {
     fn default() -> Self {
-        Self { enabled: true, roots: vec!["~/kanmon-work".into()], interval_s: 3600, max_depth: 6, system: true }
+        Self {
+            enabled: true,
+            roots: vec!["~/kanmon-work".into()],
+            interval_s: 3600,
+            max_depth: 6,
+            system: true,
+            watch_s: 60,
+            recent_window_s: 86_400,
+        }
     }
 }
 

