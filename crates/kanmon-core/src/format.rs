@@ -34,6 +34,7 @@ fn kind_label(kind: &str) -> &str {
         "raw_socket" => "raw ソケット",
         "beacon_report" => "周期通信（ビーコン）",
         "dns_integrity" => "DNS の改ざん検知",
+        "bytes_report" => "大量の送信",
         _ => kind,
     }
 }
@@ -126,6 +127,7 @@ pub fn alert_text(v: &Value) -> (String, String) {
     let exe = s(v, "process.executable").or_else(|| s(v, "process.proc_key")).unwrap_or("不明なプロセス");
     let target = match kind {
         "beacon_report" => s(v, "destination.domain").or_else(|| s(v, "kanmon.dest_key")).unwrap_or("?").to_string(),
+        "bytes_report" => s(v, "destination.domain").or_else(|| s(v, "destination.ip")).unwrap_or("?").to_string(),
         "listen" | "raw_socket" => format!(
             "{}:{}",
             s(v, "source.ip").unwrap_or("?"),
@@ -151,6 +153,20 @@ pub fn alert_text(v: &Value) -> (String, String) {
     }
     if let Some(src) = s(v, "kanmon.ti_source") {
         lines.push(format!("  一致したリスト: {src}"));
+    }
+    if let Some(b) = get_path(v, "kanmon.bytes") {
+        let out = b["out"].as_u64().unwrap_or(0);
+        let win = b["window_s"].as_u64().unwrap_or(0);
+        lines.push(format!("  送信量: {}（直近 {} 分）", crate::volume::human_bytes(out), win / 60));
+        let open = b["open_size"].as_u64().unwrap_or(0);
+        if open > 0 {
+            lines.push(format!("  開いているファイルの合計: {}", crate::volume::human_bytes(open)));
+        }
+        if let Some(top) = b["open_top"].as_array() {
+            for t in top.iter().filter_map(|x| x.as_str()) {
+                lines.push(format!("    {t}"));
+            }
+        }
     }
     if let Some(b) = get_path(v, "kanmon.beacon") {
         lines.push(format!(

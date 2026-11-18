@@ -26,6 +26,8 @@ pub struct Config {
     pub thresholds: Thresholds,
     pub retention_days: u32,
     pub jsonl: JsonlCfg,
+    /// kanmond の動作ログ
+    pub log: LogCfg,
     pub notify: NotifyCfg,
     pub feeds: Vec<Feed>,
     pub feeds_refresh_hours: u32,
@@ -41,6 +43,28 @@ pub struct Config {
     pub status_allowed_uids: Vec<u32>,
     /// 宛先の名前付け（DNS・SNI の受け身の観測）と DNS の改ざん検知
     pub dns: DnsCfg,
+    /// 送信量（プロセス × 宛先）の集計と報告
+    pub volume: VolumeCfg,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct VolumeCfg {
+    pub enabled: bool,
+    /// 接続ごとの送信量を読む間隔（秒）
+    pub interval_s: u64,
+    /// 合計する窓（秒）
+    pub window_s: u64,
+    /// この量（KB）以上送ったら報告イベント（bytes_report）を作る。判定は検知ルールで行う
+    pub min_report_kb: u64,
+    /// 同じプロセス・宛先の報告の間隔（分）
+    pub report_every_min: u64,
+}
+
+impl Default for VolumeCfg {
+    fn default() -> Self {
+        Self { enabled: true, interval_s: 10, window_s: 600, min_report_kb: 1024, report_every_min: 30 }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -113,6 +137,28 @@ pub struct JsonlCfg {
     pub path: PathBuf,
     pub max_mb: u64,
     pub keep: usize,
+    /// "size"（サイズごと：events.jsonl.1 …）/ "daily"（日付ごと：events.YYYY-MM-DD.jsonl）
+    pub rotate: String,
+    /// daily のときに残す日数
+    pub keep_days: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LogCfg {
+    /// 動作ログのファイル。空なら標準エラー（Linux の systemd では journald）
+    pub path: PathBuf,
+    /// 日付ごとのファイルを残す日数
+    pub keep_days: u32,
+}
+
+impl Default for LogCfg {
+    fn default() -> Self {
+        Self {
+            path: if cfg!(target_os = "macos") { default_base().2.join("kanmond.log") } else { PathBuf::new() },
+            keep_days: 14,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -165,7 +211,7 @@ fn default_base() -> (PathBuf, PathBuf, PathBuf) {
 
 impl Default for JsonlCfg {
     fn default() -> Self {
-        Self { path: default_base().2.join("events.jsonl"), max_mb: 50, keep: 5 }
+        Self { path: default_base().2.join("events.jsonl"), max_mb: 50, keep: 5, rotate: "size".into(), keep_days: 30 }
     }
 }
 
@@ -253,6 +299,8 @@ impl Default for Config {
             },
             status_allowed_uids: vec![],
             dns: DnsCfg::default(),
+            volume: VolumeCfg::default(),
+            log: LogCfg::default(),
         }
     }
 }

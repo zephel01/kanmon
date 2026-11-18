@@ -72,6 +72,9 @@ pub struct Monitor {
     doh_fail_logged: Option<Instant>,
     /// 同じ検知を何度も出さないための最終発報時刻
     dns_emitted: HashMap<String, i64>,
+    // ---- 送信量
+    volume: kanmon_core::volume::VolumeTracker,
+    last_volume: Option<Instant>,
     pub print: bool,
 }
 
@@ -113,7 +116,11 @@ impl Monitor {
         };
         logln!("検知ルール {} 件を読み込み（{}）", dets.detections.len(), cfg.detections_dir.display());
         let rules = load_rules(&cfg, strict)?;
-        let jsonl = JsonlWriter::open(&cfg.jsonl.path, cfg.jsonl.max_mb * 1024 * 1024, cfg.jsonl.keep)?;
+        let jsonl = if cfg.jsonl.rotate == "daily" {
+            JsonlWriter::open_daily(&cfg.jsonl.path, cfg.jsonl.max_mb * 1024 * 1024, cfg.jsonl.keep_days)?
+        } else {
+            JsonlWriter::open(&cfg.jsonl.path, cfg.jsonl.max_mb * 1024 * 1024, cfg.jsonl.keep)?
+        };
         let intel = crate::feeds::load(&cfg);
         logln!("脅威インテル {} 件", intel.len());
         let host = cfg.host_name.clone().unwrap_or_else(hostname);
@@ -209,6 +216,8 @@ impl Monitor {
             doh_inflight: HashSet::new(),
             doh_fail_logged: None,
             dns_emitted: HashMap::new(),
+            volume: Default::default(),
+            last_volume: None,
             print: false,
             cfg,
         })
@@ -255,6 +264,14 @@ impl Monitor {
                 n += 1;
             }
             cur.insert(k);
+        }
+        if self.cfg.volume.enabled
+            && self.last_volume.is_none_or(|t| t.elapsed() >= Duration::from_secs(self.cfg.volume.interval_s.max(1)))
+        {
+            self.last_volume = Some(Instant::now());
+            if let Err(e) = self.volume_tick(&socks) {
+                crate::logln!("送信量の集計エラー: {e:#}");
+            }
         }
         let alive: HashSet<u32> = socks.iter().filter_map(|s| s.pid).collect();
         self.procs.retain_alive(&alive);
@@ -444,68 +461,9 @@ impl Monitor {
         // ---- プロセス
         let mut proc_key = String::from("unknown");
         if let Some(pid) = s.pid {
-            if let Some(p) = self.procs.get(pid) {
-                let exe = p.exe.clone();
-                let name = exe.as_deref().map(basename).or_else(|| p.args.first().map(|a| basename(a)));
-                let read_path = if cfg!(target_os = "linux") {
-                    format!("/proc/{pid}/exe")
-                } else {
-                    exe.clone().unwrap_or_default()
-                };
-                let id = if exe.is_some() {
-                    self.ids.identify(&read_path, exe.as_deref().unwrap_or(""), p.exe_deleted || p.memfd)
-                } else {
-                    identity::Identity { status: "unknown".into(), ..Default::default() }
-                };
-                let script =
-                    name.as_deref().and_then(|n| identity::interpreter_script(n, &p.args, &self.cfg.interpreters));
-                let script_s = script.clone().flatten();
-                proc_key = identity::proc_key(&id, exe.as_deref(), script_s.as_deref());
-                let first = self.store.upsert_process(
-                    &ProcRow {
-                        proc_key: &proc_key,
-                        executable: exe.as_deref(),
-                        sha256: id.sha256.as_deref(),
-                        sig_status: Some(&id.status),
-                        team_id: id.team_id.as_deref(),
-                        signing_id: id.signing_id.as_deref(),
-                        package: id.package.as_deref(),
-                    },
-                    now_s,
-                )?;
-                let chain = self.procs.parent_chain(p.ppid, 6);
-                let uid = p.uid.or(s.uid);
-                e.process = ev::Process {
-                    pid: Some(pid),
-                    hidden: name.as_deref().is_some_and(|n| n.starts_with('.')),
-                    name,
-                    args: p.args.iter().take(16).map(|a| a.chars().take(512).collect()).collect(),
-                    uid,
-                    user: uid.and_then(user_name),
-                    hash: id.sha256.clone().map(|h| ev::Hash { sha256: h }),
-                    code_signature: Some(ev::CodeSignature {
-                        status: id.status.clone(),
-                        team_id: id.team_id.clone(),
-                        signing_id: id.signing_id.clone(),
-                        package: id.package.clone(),
-                    }),
-                    parent: chain.first().map(|(ppid, exe, _)| ev::Parent {
-                        pid: *ppid,
-                        name: exe.as_deref().map(basename),
-                        executable: exe.clone(),
-                    }),
-                    parent_chain: chain_names(&chain, &self.cfg.interpreters),
-                    exe_deleted: p.exe_deleted,
-                    memfd: p.memfd,
-                    interpreter: script.is_some(),
-                    script: script_s,
-                    proc_key: Some(proc_key.clone()),
-                    first_seen: chrono::DateTime::from_timestamp(first, 0)
-                        .map(|t| t.with_timezone(&Local).to_rfc3339_opts(SecondsFormat::Secs, false)),
-                    first_seen_age_s: Some(now_s - first),
-                    file_age_s: id.file_age_s,
-                    executable: exe,
-                };
+            if let Some((p, k)) = self.process_info(pid, s.uid, now_s)? {
+                e.process = p;
+                proc_key = k;
             }
         } else {
             e.process.uid = s.uid;
@@ -567,6 +525,165 @@ impl Monitor {
             min,
         );
         Ok(true)
+    }
+
+    /// 接続ごとの累積送信量を取り込み、窓の合計が大きいもの（プロセス × 宛先）を報告する
+    fn volume_tick(&mut self, socks: &[Sock]) -> Result<()> {
+        let inode_pid: HashMap<u64, u32> =
+            socks.iter().filter(|s| s.inode != 0).filter_map(|s| s.pid.map(|p| (s.inode, p))).collect();
+        let flows: Vec<kanmon_core::volume::FlowBytes> = crate::volume::collect(&inode_pid)
+            .into_iter()
+            .filter(|f| {
+                // LAN（NAS へのバックアップ・AirDrop 等）は数えない。ループバックは include_loopback のときだけ
+                let sc = netclass::scope(&f.remote.ip());
+                f.pid != self.self_pid && (sc == "internet" || (self.cfg.include_loopback && sc == "loopback"))
+            })
+            .collect();
+        let now = Utc::now().timestamp();
+        let v = &self.cfg.volume;
+        let (window, min, every) = (v.window_s as i64, v.min_report_kb * 1024, v.report_every_min as i64 * 60);
+        self.volume.update(&flows, now, window);
+        for d in self.volume.due(now, min, every) {
+            self.emit_bytes(&d, now)?;
+        }
+        Ok(())
+    }
+
+    fn emit_bytes(&mut self, d: &kanmon_core::volume::Due, now_s: i64) -> Result<()> {
+        let learning = self.learning();
+        let scope = netclass::scope(&d.remote).to_string();
+        let named = self.names.lookup(None, std::net::SocketAddr::new(d.remote, 0), now_s);
+        let mut e = Event {
+            timestamp: Local::now().to_rfc3339_opts(SecondsFormat::Millis, false),
+            event: ev::EventMeta {
+                id: self.next_id(),
+                kind: "alert".into(),
+                action: "bytes_report".into(),
+                outcome: None,
+            },
+            host: ev::Host { name: self.host.clone(), os: self.os.into() },
+            network: ev::Network {
+                kind: "bytes_report".into(),
+                direction: "outbound".into(),
+                transport: "tcp".into(),
+                scope: Some(scope),
+            },
+            destination: Some(ev::Destination {
+                ip: Some(d.remote.to_string()),
+                domain: named.as_ref().map(|n| n.name.clone()),
+                domain_source: named.as_ref().map(|n| n.source.to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        e.kanmon.mode = if learning { "learning".into() } else { self.cfg.mode.clone() };
+        e.kanmon.learning = learning;
+        let mut proc_key = format!("pid:{}", d.pid);
+        if let Some((p, k)) = self.process_info(d.pid, None, now_s)? {
+            e.process = p;
+            proc_key = k;
+        } else {
+            e.process.pid = Some(d.pid);
+        }
+        let files = crate::volume::open_files(d.pid);
+        let sum = kanmon_core::volume::summarize_open(&files);
+        e.kanmon.bytes = Some(ev::BytesFacts {
+            out: d.bytes,
+            window_s: self.cfg.volume.window_s,
+            open_size: sum.total_size,
+            out_per_open: (sum.total_size > 0).then(|| d.bytes as f64 / sum.total_size as f64),
+            open_paths: sum.paths,
+            open_exts: sum.exts,
+            open_top: sum.top,
+        });
+        if let Some(src) = self.intel.lookup_ip(&d.remote) {
+            e.kanmon.ti_match = true;
+            e.kanmon.ti_source = Some(src.to_string());
+        }
+        let mut v = serde_json::to_value(&e)?;
+        let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);
+        self.store.insert_event(&v, now_s)?;
+        self.jsonl.write(&v)?;
+        if self.print {
+            println!("{}", serde_json::to_string(&v)?);
+        }
+        let (title, body) = kanmon_core::format::alert_text(&v);
+        self.record_alert(&v, out.level, out.score, "bytes_report", &title, &body);
+        let min = self.min_notify_level();
+        self.notifier
+            .send(Message { level: out.level, title, body, dedup_key: format!("bytes|{proc_key}|{}", d.remote) }, min);
+        Ok(())
+    }
+
+    /// pid のプロセス情報（識別・署名・親の列）を集める。`proc_key` も返す。
+    /// 接続イベントと送信量の報告で共通に使う
+    fn process_info(
+        &mut self,
+        pid: u32,
+        fallback_uid: Option<u32>,
+        now_s: i64,
+    ) -> Result<Option<(ev::Process, String)>> {
+        if let Some(p) = self.procs.get(pid) {
+            let exe = p.exe.clone();
+            let name = exe.as_deref().map(basename).or_else(|| p.args.first().map(|a| basename(a)));
+            let read_path =
+                if cfg!(target_os = "linux") { format!("/proc/{pid}/exe") } else { exe.clone().unwrap_or_default() };
+            let id = if exe.is_some() {
+                self.ids.identify(&read_path, exe.as_deref().unwrap_or(""), p.exe_deleted || p.memfd)
+            } else {
+                identity::Identity { status: "unknown".into(), ..Default::default() }
+            };
+            let script = name.as_deref().and_then(|n| identity::interpreter_script(n, &p.args, &self.cfg.interpreters));
+            let script_s = script.clone().flatten();
+            let proc_key = identity::proc_key(&id, exe.as_deref(), script_s.as_deref());
+            let first = self.store.upsert_process(
+                &ProcRow {
+                    proc_key: &proc_key,
+                    executable: exe.as_deref(),
+                    sha256: id.sha256.as_deref(),
+                    sig_status: Some(&id.status),
+                    team_id: id.team_id.as_deref(),
+                    signing_id: id.signing_id.as_deref(),
+                    package: id.package.as_deref(),
+                },
+                now_s,
+            )?;
+            let chain = self.procs.parent_chain(p.ppid, 6);
+            let uid = p.uid.or(fallback_uid);
+            let process = ev::Process {
+                pid: Some(pid),
+                hidden: name.as_deref().is_some_and(|n| n.starts_with('.')),
+                name,
+                args: p.args.iter().take(16).map(|a| a.chars().take(512).collect()).collect(),
+                uid,
+                user: uid.and_then(user_name),
+                hash: id.sha256.clone().map(|h| ev::Hash { sha256: h }),
+                code_signature: Some(ev::CodeSignature {
+                    status: id.status.clone(),
+                    team_id: id.team_id.clone(),
+                    signing_id: id.signing_id.clone(),
+                    package: id.package.clone(),
+                }),
+                parent: chain.first().map(|(ppid, exe, _)| ev::Parent {
+                    pid: *ppid,
+                    name: exe.as_deref().map(basename),
+                    executable: exe.clone(),
+                }),
+                parent_chain: chain_names(&chain, &self.cfg.interpreters),
+                exe_deleted: p.exe_deleted,
+                memfd: p.memfd,
+                interpreter: script.is_some(),
+                script: script_s,
+                proc_key: Some(proc_key.clone()),
+                first_seen: chrono::DateTime::from_timestamp(first, 0)
+                    .map(|t| t.with_timezone(&Local).to_rfc3339_opts(SecondsFormat::Secs, false)),
+                first_seen_age_s: Some(now_s - first),
+                file_age_s: id.file_age_s,
+                executable: exe,
+            };
+            return Ok(Some((process, proc_key)));
+        }
+        Ok(None)
     }
 
     /// 状態ソケットに出す直近の警告（notice 以上）と最終イベント時刻を更新（ライブ）
@@ -937,7 +1054,7 @@ impl Monitor {
                     kind: "beacon_report".into(),
                     direction: "outbound".into(),
                     transport: "any".into(),
-                    scope: None,
+                    scope: Some(dest_key_scope(&dk).into()),
                 },
                 destination: Some(ev::Destination {
                     domain: (!dk.contains('/')).then(|| dk.clone()),
@@ -970,6 +1087,14 @@ impl Monitor {
     }
 }
 
+/// 宛先キー（`203.0.113.0/24`・`2001:db8::/48`・登録ドメイン）の範囲。ドメインはインターネット扱い
+pub fn dest_key_scope(dk: &str) -> &'static str {
+    match dk.split('/').next().and_then(|ip| ip.parse::<IpAddr>().ok()) {
+        Some(ip) => netclass::scope(&ip),
+        None => "internet",
+    }
+}
+
 /// 親プロセス列の名前。インタプリタ（node・python・bash 等）の場合はスクリプト名も加える。
 /// 例：`node /usr/lib/node_modules/npm/bin/npm-cli.js install` → ["node", "npm-cli.js"]
 pub fn chain_names(chain: &[(u32, Option<String>, Vec<String>)], interpreters: &[String]) -> Vec<String> {
@@ -998,6 +1123,14 @@ fn load_rules(cfg: &Config, strict: bool) -> Result<RuleSet> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dest_key_scopes() {
+        assert_eq!(dest_key_scope("203.0.113.0/24"), "internet");
+        assert_eq!(dest_key_scope("fe80:13:0::/48"), "lan");
+        assert_eq!(dest_key_scope("192.168.4.0/24"), "lan");
+        assert_eq!(dest_key_scope("example.com"), "internet");
+    }
 
     #[test]
     fn chain_names_include_scripts() {

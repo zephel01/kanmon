@@ -47,6 +47,11 @@ resolv_conf = ["$W/resolv.conf"]
 check_interval_s = 3
 # 外部の DoH には問い合わせない（照合 N3 は単体テストで確認）
 crosscheck = false
+[volume]
+interval_s = 1
+window_s = 60
+min_report_kb = 512
+report_every_min = 1
 EOF
 
 # ---- 偽 ntfy（受け取った JSON を保存するだけ）
@@ -155,6 +160,32 @@ echo "[L] hosts の書き換え（N1・N1w・N1r）と、見慣れない DNS サ
 echo "203.0.113.66 registry.npmjs.org" >> "$W/hosts"
 echo "nameserver 198.51.100.53" > "$W/resolv.conf"
 
+echo "[M] npm を名乗るスクリプトの配下で、ダミーの .env を開いたまま 3MB を送る（V3・V4）"
+python3 - <<'PY' &
+import socket
+srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.5", 18555)); srv.listen(1)
+c, _ = srv.accept()
+while c.recv(65536):
+    pass
+PY
+SRV=$!
+sleep 0.5
+mkdir -p "$W/app"; echo "API_KEY=dummy-for-test" > "$W/app/.env"
+cat > "$W/npm" <<'SH'
+#!/bin/bash
+# インストールスクリプトが .env を開いたまま外へ送る想定（宛先はローカル、中身はゼロ埋め）
+python3 - "$1" <<'PY'
+import socket, sys, time
+f = open(sys.argv[1])            # 開いたままにする
+s = socket.create_connection(("127.0.0.5", 18555), 3)
+s.sendall(b"\0" * (3 * 1024 * 1024))
+time.sleep(3)                   # 集計（1 秒ごと）が見えるまで接続を保つ
+PY
+SH
+chmod +x "$W/npm"; "$W/npm" "$W/app/.env"
+wait $SRV 2>/dev/null || true
+
 echo "[E] 疑似ビーコン：1 秒周期 × 10 回（S7）"
 "$W/netclient" 203.0.113.20 443 10 1000 500
 sleep 12  # ビーコン集計を待つ
@@ -236,6 +267,10 @@ n1 = find(lambda e: e["network"]["kind"] == "dns_integrity" and e["kanmon"]["dns
 check("L: hosts の書き換えに N1+N1w+N1r、critical", n1 and {"N1","N1w","N1r"} <= sig(n1[0]) and n1[0]["kanmon"]["level"] == "critical")
 n2 = find(lambda e: e["network"]["kind"] == "dns_integrity" and e["kanmon"]["dns"]["finding"] == "resolver_changed")
 check("L: DNS サーバーの変更に N2+N2p、warn", n2 and {"N2","N2p"} <= sig(n2[0]) and n2[0]["kanmon"]["level"] == "warn")
+m = find(lambda e: e["network"]["kind"] == "bytes_report" and e.get("destination",{}).get("ip") == "127.0.0.5")
+check("M: bytes_report に V3+V4、.env が開いているファイルに入る", m and {"V3","V4"} <= sig(m[0])
+      and m[0]["kanmon"]["bytes"]["out"] >= 3*1024*1024
+      and any(p.endswith("/app/.env") for p in m[0]["kanmon"]["bytes"]["open_paths"]))
 print("RESULT:", "OK" if ok else "NG")
 sys.exit(0 if ok else 1)
 PY

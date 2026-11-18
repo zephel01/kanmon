@@ -1,0 +1,84 @@
+# 送信量（network.kind = bytes_report）。kanmond が「プロセス × 宛先」ごとに直近 10 分の送信量を集計し、
+# 既定で 1MB 以上のものを報告する。量だけでは判断せず、開いているファイル・宛先・親プロセスと組み合わせる。
+#   - GGUF 等のモデルを Hugging Face へ上げる、のような正当な大量送信は減点（V9）
+#   - AI エージェントの CLI がリポジトリ（.git/objects・bundle）や .env を開いたまま大量に送る、は加点
+# 開いているファイルは報告の瞬間のもの。送信前に閉じたファイル（一時ファイル等）は見えない【既知の限界】
+lists:
+  # 開いていたら持ち出しを疑うファイル（パスの一部）
+  sensitive_paths:
+    ["/.git/objects/", ".bundle", "/.env", ".env.local", "/.ssh/", "/.aws/", "/.config/gcloud/", "/.kube/",
+     "/.docker/config.json", "/.npmrc", "/.pypirc", "/.netrc", "/.gnupg/", "id_rsa", "id_ed25519",
+     "/Library/Keychains/", "/Cookies", "/Login Data", "/.git-credentials"]
+  # モデル・データの拡張子
+  model_exts: [gguf, safetensors, onnx, ckpt, pt, bin, h5, tflite, mlmodel, mlpackage, npz, parquet, arrow]
+  # 大きいファイルの正当な置き場（登録ドメイン）。自分の置き場はここに足す
+  upload_ok: [huggingface.co, hf.co]
+detections:
+  - id: V1
+    name: large_upload
+    points: 20
+    description: 10 分で 100MB 以上を 1 つの宛先へ送った
+    kinds: [bytes_report]
+    when: { field: kanmon.bytes.out, op: gte, value: 104857600 }
+
+  - id: V2
+    name: ai_cli_upload
+    points: 40
+    description: AI コーディング CLI が 1 つの宛先へ 50MB 以上を送った（リポジトリごと送っている疑い）
+    kinds: [bytes_report]
+    when:
+      all:
+        - { field: process.name, op: in, value: "@ai_clis", ci: true }
+        - { field: kanmon.bytes.out, op: gte, value: 52428800 }
+
+  - id: V3
+    name: pkg_install_upload
+    points: 50
+    description: パッケージ導入処理の配下から 1MB 以上を送った（インストール時の持ち出しの疑い）
+    kinds: [bytes_report]
+    when:
+      all:
+        - { field: process.parent_chain, op: in, value: "@pkg_managers", ci: true }
+        - { field: kanmon.bytes.out, op: gte, value: 1048576 }
+
+  - id: V4
+    name: sensitive_open_upload
+    points: 50
+    description: 秘密情報・リポジトリの中身（.env・~/.ssh・.git/objects 等）を開いたまま 1MB 以上を送った
+    kinds: [bytes_report]
+    when:
+      all:
+        - { field: kanmon.bytes.open_paths, op: contains, value: "@sensitive_paths" }
+        - { field: kanmon.bytes.out, op: gte, value: 1048576 }
+
+  - id: V5
+    name: upload_exceeds_open_files
+    points: 15
+    description: 開いているファイルの合計の 3 倍以上を送った（手元のファイル以外のものを送っている）
+    kinds: [bytes_report]
+    when:
+      all:
+        - { field: kanmon.bytes.out_per_open, op: gte, value: 3 }
+        - { field: kanmon.bytes.out, op: gte, value: 104857600 }
+
+  - id: V6
+    name: large_upload_unnamed
+    points: 15
+    description: 名前の分からない宛先へ、署名の無いプロセスが 100MB 以上を送った
+    kinds: [bytes_report]
+    when:
+      all:
+        - { field: destination.domain, op: missing }
+        - { field: kanmon.bytes.out, op: gte, value: 104857600 }
+        - { field: process.code_signature.status, op: not_in, value: [apple, developer_id, app_store, package] }
+
+  - id: V9
+    name: model_upload_to_known_host
+    points: -40
+    description: モデル・データのファイルを、登録済みの置き場（Hugging Face 等）へ上げている（減点）
+    kinds: [bytes_report]
+    when:
+      all:
+        - { field: kanmon.bytes.open_exts, op: in, value: "@model_exts", ci: true }
+        - { field: destination.registered_domain, op: in, value: "@upload_ok", ci: true }
+        - not: { field: kanmon.bytes.open_paths, op: contains, value: "@sensitive_paths" }

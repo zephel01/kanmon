@@ -6,6 +6,21 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-11-18
+送信量の検知、S7（周期通信）の誤検知の削減、ログの日付ごとの切り替え。
+
+### 追加
+- **送信量の検知**（`detections/55-volume.yaml`、V1〜V6・V9）：「プロセス × 宛先」ごとに直近 10 分の送信量を集計し、1MB 以上を `bytes_report` として報告する。量だけでなく、開いているファイル（名前・拡張子・容量）、宛先、親プロセスと組み合わせて判定する
+  - AI コーディング CLI がリポジトリ（`.git/objects`）や `.env` を開いたまま大量に送る、パッケージ導入処理の配下から 1MB 以上を送る、などを加点
+  - GGUF・safetensors 等を Hugging Face 等の登録済みの置き場へ上げる正当な送信は減点
+  - Linux は netlink の sock_diag（`tcpi_bytes_acked`）、macOS は `nettop` で接続ごとの送信量を読む。TCP のみ（QUIC 等の UDP は対象外）。LAN の宛先は数えない
+- **ログの日付ごとの切り替え**：kanmond の動作ログを kanmond 自身が書き、日付が変わったら `kanmond.YYYY-MM-DD.log` に切り替えて 14 日残す（`[log]`）。`events.jsonl` も `[jsonl] rotate = "daily"` で日付ごとにできる（既定はサイズごとのまま）
+- 設定 `[volume]`・`[log]`・`[jsonl] rotate` / `keep_days`
+
+### 変更
+- **S7 / S7m**：+30 / +15 → +20 / +10。署名のあるアプリの定期的な問い合わせ（更新確認・API のポーリング）だけでは記録のみにした。信頼できない実行ファイル（S7x）と組み合わさると通知になる。LAN の宛先（AirDrop 等）と、間隔が 1 秒未満のもの（連続した通信）は対象外。`beacon_report` に宛先の範囲（`network.scope`）を付けた
+- macOS の launchd の標準エラーの出し先を `kanmond.stderr.log` にした（起動直後の失敗だけが入る）
+
 ## [0.2.2] - 2026-11-18
 v0.2.1 の Kanmon.app が Command Line Tools だけの環境でビルドできなかった問題の修正。
 

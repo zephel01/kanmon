@@ -15,10 +15,12 @@ pub mod intel;
 pub mod jsonl;
 pub mod names;
 pub mod netclass;
+pub mod rotate;
 pub mod rules;
 pub mod scoring;
 #[cfg(feature = "sqlite")]
 pub mod store;
+pub mod volume;
 pub mod wire;
 
 pub use detect::{DetectionSet, SignalHit};
