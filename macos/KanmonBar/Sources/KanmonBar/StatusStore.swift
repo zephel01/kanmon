@@ -16,6 +16,9 @@ final class StatusStore: ObservableObject {
     private var timer: Timer?
     private var seen = Set<String>()
     private var primed = false
+    /// これより新しい警告だけをウィンドウで出す（アプリ起動時刻、または出した中で最新の時刻）。
+    /// kanmond の再起動で DB から読み戻された古い警告を「新着」と誤認しないため
+    private var popAfter = Date()
     let windows = AlertWindows()
 
     var socketPath: String {
@@ -67,7 +70,13 @@ final class StatusStore: ObservableObject {
             primed = true
             return
         }
-        for a in fresh.filter(\.isSevere).prefix(3).reversed() {
+        let toPop = fresh.filter { a in
+            a.isSevere && (Fmt.date(a.ts).map { $0 > popAfter } ?? false)
+        }
+        if let newest = toPop.compactMap({ Fmt.date($0.ts) }).max() {
+            popAfter = newest
+        }
+        for a in toPop.prefix(3).reversed() {
             windows.show(a)
         }
     }

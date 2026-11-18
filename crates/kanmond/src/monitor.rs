@@ -524,7 +524,9 @@ impl Monitor {
                 continue;
             }
             let key = (pk.clone(), dk.clone());
-            if self.beacon_reported.get(&key).is_some_and(|t| now - *t < 6 * 3600) {
+            if self.beacon_reported.get(&key).is_some_and(|t| now - *t < 6 * 3600)
+                || self.store.beacon_reported_since(&pk, &dk, now - 6 * 3600).unwrap_or(false)
+            {
                 continue;
             }
             self.beacon_reported.insert(key, now);
