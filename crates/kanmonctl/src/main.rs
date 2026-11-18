@@ -135,6 +135,9 @@ enum Cmd {
         /// 所見をすべて表示する（既定は特徴ごとに 3 件まで）
         #[arg(long)]
         all: bool,
+        /// --file でも、新しく増えた依存をレジストリで調べる（パッケージ指定のときは常に調べる）
+        #[arg(long)]
+        check_deps: bool,
     },
     /// 直近のレベル別件数とスコア上位
     Status {
@@ -439,8 +442,9 @@ fn main() -> Result<()> {
                 items.len()
             );
         }
-        Cmd::Inspect { spec, base, file, base_file, eco, detections, json, all } => {
-            let code = inspect::run(inspect::Args { spec, base, file, base_file, eco, detections, json, all })?;
+        Cmd::Inspect { spec, base, file, base_file, eco, detections, json, all, check_deps } => {
+            let code =
+                inspect::run(inspect::Args { spec, base, file, base_file, eco, detections, json, all, check_deps })?;
             if code != 0 {
                 std::process::exit(code);
             }

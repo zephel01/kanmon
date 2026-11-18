@@ -23,7 +23,14 @@ pub struct Args {
     pub detections: PathBuf,
     pub json: bool,
     pub all: bool,
+    /// 新しく増えた依存をレジストリで調べる（パッケージ指定では常に。--file では --check-deps のときだけ）
+    pub check_deps: bool,
 }
+
+/// 新しい依存の上限（1 回の検査でレジストリに問い合わせる数）
+const MAX_DEP_LOOKUPS: usize = 10;
+/// 依存の初公開がこれより新しければ「出来たばかりの依存」とする
+const YOUNG_DEP_DAYS: i64 = 30;
 
 /// 結果（表示と終了コードの元）
 pub struct Report {
@@ -109,7 +116,36 @@ pub fn inspect(a: &Args, fetcher: &dyn fetch::Fetcher, now: i64) -> Result<Repor
         chain_rpc: dets.list("chain_rpc"),
         chain_rpc_suffixes: dets.list("chain_rpc_suffixes"),
     };
-    let findings = analyze(eco, new.entries, old.map(|o| o.entries), &meta, now, &lists, pre);
+    let mut findings = analyze(eco, new.entries, old.map(|o| o.entries), &meta, now, &lists, pre);
+    // 新しく増えた依存が、出来たばかり・レジストリに無い（取り下げ済み）なら、本体を依存に置く手口を疑う
+    let online = a.spec.is_some() || a.check_deps;
+    if online {
+        let base_time = meta.published.unwrap_or(now);
+        let deps: Vec<String> = findings
+            .iter()
+            .filter(|f| f.feature == "new_dependency")
+            .map(|f| f.excerpt.clone())
+            .take(MAX_DEP_LOOKUPS)
+            .collect();
+        for d in deps {
+            match fetch::first_published(fetcher, eco, &d) {
+                Ok(None) => findings.push(Finding::new(
+                    "new_dep_young",
+                    "依存",
+                    None,
+                    &format!("{d}（レジストリに無い：取り下げ済みの可能性）"),
+                )),
+                Ok(Some(t)) if base_time - t < YOUNG_DEP_DAYS * 86_400 => findings.push(Finding::new(
+                    "new_dep_young",
+                    "依存",
+                    None,
+                    &format!("{d}（初公開から {} 日）", ((base_time - t).max(0)) / 86_400),
+                )),
+                Ok(Some(_)) => {}
+                Err(e) => eprintln!("依存 {d} を調べられません: {e}"),
+            }
+        }
+    }
     let mut ev = to_event(eco, &meta, &findings);
     let out = scoring::apply(&mut ev, &dets, &RuleSet::default(), &Thresholds::default());
     Ok(Report { eco, meta, score: out.score, level: out.level, signals: out.signals, findings })
@@ -242,6 +278,7 @@ mod tests {
             detections: root().join("detections"),
             json: false,
             all: false,
+            check_deps: false,
         };
         let r = inspect(&a, &NoNet, 0).unwrap();
         std::fs::remove_dir_all(&d).ok();
@@ -337,6 +374,7 @@ mod tests {
             detections: root().join("detections"),
             json: false,
             all: false,
+            check_deps: false,
         };
         assert!(inspect(&a, &NoNet, 0).is_err());
     }

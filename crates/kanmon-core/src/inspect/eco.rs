@@ -69,6 +69,73 @@ pub fn scan_npm(diffs: &[FileDiff]) -> Vec<Finding> {
     scan_new_root_scripts(diffs, Some(&new), &mut out)
 }
 
+/// 新しく増えた依存（レジストリから取るもの）の名前。npm は package.json、PyPI は METADATA / PKG-INFO の Requires-Dist。
+/// 前の版と比べられるときだけ（初めての公開では空）。extra（任意の追加機能）だけの依存は除く
+pub fn new_dependencies(eco: super::Ecosystem, diffs: &[FileDiff]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    match eco {
+        super::Ecosystem::Npm => {
+            let Some(pj) = diffs.iter().find(|d| d.path == "package.json" && d.change == Change::Changed) else {
+                return out;
+            };
+            let (Some(new), Some(old)) = (json_of(pj.new.as_ref()), json_of(pj.old.as_ref())) else { return out };
+            let names = |v: &serde_json::Value| -> Vec<(String, String)> {
+                ["dependencies", "optionalDependencies", "peerDependencies"]
+                    .iter()
+                    .filter_map(|k| v.get(*k).and_then(|x| x.as_object()))
+                    .flat_map(|o| o.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())))
+                    .collect()
+            };
+            let old_names: std::collections::HashSet<String> = names(&old).into_iter().map(|(k, _)| k).collect();
+            for (k, spec) in names(&new) {
+                let l = spec.to_ascii_lowercase();
+                let url = ["github:", "git+", "git://", "http://", "https://", "file:", "link:", "workspace:"]
+                    .iter()
+                    .any(|p| l.starts_with(p));
+                if !old_names.contains(&k) && !url && super::valid_name(super::Ecosystem::Npm, &k) {
+                    out.push(k);
+                }
+            }
+        }
+        super::Ecosystem::Pypi => {
+            let Some(md) = diffs.iter().find(|d| {
+                (d.path.ends_with(".dist-info/METADATA") || d.path == "PKG-INFO") && d.change != Change::Removed
+            }) else {
+                return out;
+            };
+            let reqs = |b: Option<&Vec<u8>>| -> Vec<String> {
+                String::from_utf8_lossy(b.map(|x| x.as_slice()).unwrap_or_default())
+                    .lines()
+                    .filter_map(|l| l.strip_prefix("Requires-Dist:"))
+                    .filter(|l| !l.contains("extra =="))
+                    .filter_map(|l| {
+                        let n: String =
+                            l.trim().chars().take_while(|c| c.is_ascii_alphanumeric() || "._-".contains(*c)).collect();
+                        (!n.is_empty()).then(|| n.to_ascii_lowercase().replace('_', "-"))
+                    })
+                    .collect()
+            };
+            // dist-info の名前は版ごとに変わる（Added になる）。前の版のものを Removed から探す
+            let old_md = diffs.iter().find(|d| {
+                (d.path.ends_with(".dist-info/METADATA") || d.path == "PKG-INFO") && d.change == Change::Removed
+            });
+            let old_b = md.old.as_ref().or(old_md.and_then(|d| d.old.as_ref()));
+            if old_b.is_none() {
+                return out;
+            }
+            let olds: std::collections::HashSet<String> = reqs(old_b).into_iter().collect();
+            for n in reqs(md.new.as_ref()) {
+                if !olds.contains(&n) && super::valid_name(super::Ecosystem::Pypi, &n) {
+                    out.push(n);
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// binding.gyp のコマンド展開（`<!(…)`）は、npm install の node-gyp で実行される（scripts が無くても動く）
 fn gyp_exec(diffs: &[FileDiff], out: &mut Vec<Finding>) {
     for d in diffs.iter().filter(|d| d.change != Change::Removed && d.path.ends_with("binding.gyp")) {
@@ -301,6 +368,24 @@ mod tests {
         );
         // 初めての公開（比較相手なし）では new_top_level を出さない
         assert!(!feats(&scan_pypi(&[fd("pkg/a.py", Change::Added, None, Some("x"))], None)).contains(&"new_top_level"));
+    }
+
+    #[test]
+    fn new_deps() {
+        let old = r#"{"name":"m","dependencies":{"zod":"^4"}}"#;
+        let new = r#"{"name":"m","dependencies":{"zod":"^4","easy-day-js":"^1.11.21","@x/y":"github:x/y#abc"}}"#;
+        let d = vec![fd("package.json", Change::Changed, Some(old), Some(new))];
+        assert_eq!(new_dependencies(crate::inspect::Ecosystem::Npm, &d), vec!["easy-day-js"]);
+        let mo = "Name: a\nRequires-Dist: requests>=2\nRequires-Dist: pytest; extra == \"dev\"\n";
+        let mn =
+            "Name: a\nRequires-Dist: requests>=2\nRequires-Dist: evil_pkg (>=1)\nRequires-Dist: x; extra == \"dev\"\n";
+        let d = vec![
+            fd("a-1.0.dist-info/METADATA", Change::Removed, Some(mo), None),
+            fd("a-1.1.dist-info/METADATA", Change::Added, None, Some(mn)),
+        ];
+        assert_eq!(new_dependencies(crate::inspect::Ecosystem::Pypi, &d), vec!["evil-pkg"]);
+        // 初めての公開（前の版なし）は空
+        assert!(new_dependencies(crate::inspect::Ecosystem::Pypi, &d[1..]).is_empty());
     }
 
     #[test]

