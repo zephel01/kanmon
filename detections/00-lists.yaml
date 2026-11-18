@@ -1,0 +1,40 @@
+# 共有リスト。他のファイルから "@名前" で参照する。
+# 同じ名前のリストが複数ファイルにあれば結合される（追加はここに書かず別ファイルでも可）。
+lists:
+  temp_dirs:
+    - /tmp/
+    - /var/tmp/
+    - /dev/shm/
+    - /private/tmp/
+    - /private/var/tmp/
+    - /private/var/folders/
+    - ~/Downloads/
+    - ~/Library/Caches/
+    - ~/.cache/
+  shells_interp:
+    [bash, sh, zsh, dash, fish, ksh, tcsh, python, python2, python3, perl, ruby, node, bun, deno, php,
+     osascript, pwsh, powershell, lua, tclsh]
+  downloaders: [curl, wget, nc, ncat, netcat, socat, telnet, openssl]
+  # 「ここからシェルが起動して通信」は不審（設計書 S6）
+  doc_apps:
+    ["Microsoft Word", "Microsoft Excel", "Microsoft PowerPoint", "Microsoft Outlook", Preview, Pages, Numbers,
+     Keynote, Mail, "Adobe Acrobat", AdobeAcrobat, "Adobe Acrobat Reader", Thunderbird, thunderbird, soffice.bin,
+     soffice, libreoffice, evince, okular, xreader]
+  browsers:
+    ["Google Chrome", "Google Chrome Helper", chrome, chromium, chromium-browser, firefox, firefox-bin, Safari,
+     "Microsoft Edge", "Microsoft Edge Helper", msedge, "Brave Browser", brave, Arc, Vivaldi, vivaldi-bin, opera,
+     com.apple.WebKit.Networking]
+  # 既知の公開 DoH/DoT サーバー（アプリ独自の DNS 迂回の手掛かり、設計書 §8）
+  doh_ips:
+    ["1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001", "8.8.8.8", "8.8.4.4",
+     "2001:4860:4860::8888", "2001:4860:4860::8844", "9.9.9.9", "149.112.112.112", "2620:fe::fe", "2620:fe::9",
+     "94.140.14.14", "94.140.15.15", "208.67.222.222", "208.67.220.220", "45.90.28.0", "45.90.30.0"]
+  # 正規利用もあるトンネル・動的 DNS（加点のみ、設計書 S18）
+  tunnel_domains:
+    [trycloudflare.com, ngrok.io, ngrok-free.app, ngrok.app, loca.lt, localtunnel.me, serveo.net, duckdns.org,
+     no-ip.com, ddns.net, hopto.org, zapto.org, sytes.net, dynu.net, freedns.afraid.org, pagekite.me,
+     bore.pub, tunnelmole.net, playit.gg, pinggy.io]
+  # raw / packet ソケットを使うのが普通なもの（S17 の除外）
+  raw_ok:
+    [ping, ping6, traceroute, traceroute6, mtr, mtr-packet, tcpdump, dumpcap, NetworkManager, dhclient, dhcpcd,
+     systemd-networkd, wpa_supplicant, lldpd, avahi-daemon, arping, kanmond, cups-browsed, nmap]

@@ -1,0 +1,28 @@
+# 内向き・待受・raw ソケット（設計書 S15〜S17、§9.5）
+detections:
+  - id: S15
+    name: new_listener_exposed
+    points: 25
+    # ベースラインに無い待受（ループバック以外に bind）
+    description: 新しい待受ポートを外部に公開
+    kinds: [listen]
+    when:
+      all:
+        - { field: kanmon.listen_new, op: eq, value: true }
+        - { field: network.scope, op: ne, value: loopback }
+
+  - id: S16
+    name: inbound_from_internet
+    points: 30
+    # インターネット側からの新規接続受信
+    description: インターネットから着信
+    kinds: [accept]
+    when: { field: network.scope, op: eq, value: internet }
+
+  - id: S17
+    name: raw_socket
+    points: 20
+    # raw / packet ソケット（ICMP トンネル・盗聴の材料）
+    description: raw / packet ソケットを作成
+    kinds: [raw_socket]
+    when: { field: process.name, op: not_in, value: "@raw_ok" }

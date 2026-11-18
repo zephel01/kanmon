@@ -1,0 +1,63 @@
+# 宛先側のシグナル（設計書 §9.1）
+# ※ 第1弾はポーリング収集のため destination.domain は空（DNS 紐付けは第5弾）。
+#   ドメインを使うルール（S9・S18）は replay や将来のDNS強化で効く。
+detections:
+  - id: S1
+    name: threat_intel_match
+    points: 100
+    # 脅威インテル（Feodo / Spamhaus DROP / ローカル拒否リスト）に一致
+    description: 脅威インテル（既知の悪性 IP・ドメイン）に一致
+    when: { field: kanmon.ti_match, op: eq, value: true }
+
+  - id: S9
+    name: dga_like_domain
+    points: 15
+    description: 自動生成（DGA）らしいドメイン
+    when: { field: kanmon.dga_score, op: gte, value: 0.7 }
+
+  - id: S11
+    name: nonstandard_port_new
+    points: 10
+    # インターネットへ非標準ポート、かつこのプロセスでは初めて
+    description: 普段使わない非標準ポートでインターネットへ
+    kinds: [connect]
+    when:
+      all:
+        - { field: network.scope, op: eq, value: internet }
+        - { field: destination.port, op: not_in, value: [80, 443, 53, 853, 123, 22, 993, 587, 465, 5223] }
+        - { field: kanmon.port_first_for_process, op: eq, value: true }
+
+  - id: S12
+    name: new_destination_for_process
+    points: 10
+    # このプロセスが初めて行く宛先（/24 または登録ドメイン）
+    description: このプロセスが初めて行く宛先
+    kinds: [connect]
+    when:
+      all:
+        - { field: network.scope, op: eq, value: internet }
+        - { field: kanmon.dest_first_for_process, op: eq, value: true }
+
+  - id: S14
+    name: dns_bypass
+    points: 15
+    # ブラウザ以外が既知の DoH サーバー(443) または DoT/DoQ(853) へ
+    description: ブラウザ以外が DNS を迂回（DoH/DoT）
+    kinds: [connect]
+    when:
+      all:
+        - { field: process.name, op: not_in, value: "@browsers", ci: true }
+        - any:
+            - { field: destination.port, op: eq, value: 853 }
+            - all:
+                - { field: destination.ip, op: in, value: "@doh_ips" }
+                - { field: destination.port, op: eq, value: 443 }
+
+  - id: S18
+    name: tunnel_or_ddns_domain
+    points: 10
+    description: トンネル・動的 DNS 系のドメイン
+    when:
+      any:
+        - { field: destination.registered_domain, op: in, value: "@tunnel_domains", ci: true }
+        - { field: destination.domain, op: suffix, value: "@tunnel_domains", ci: true }

@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/kanmon-core", "crates/kanmond", "crates/kanmonctl"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+rust-version = "1.82"
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+regex = "1"
+ipnet = "2"
+psl = "2"
+sha2 = "0.10"
+hex = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+
+[profile.release]
+lto = "thin"
+strip = true

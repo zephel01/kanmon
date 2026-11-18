@@ -1,0 +1,22 @@
+[package]
+name = "kanmon-core"
+description = "kanmon 共通コア：検知ルール(YAML)・許可/拒否ルール・スコアリング・ビーコン・DGA・脅威インテル・保存"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = ["sqlite"]
+sqlite = ["dep:rusqlite"]
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+regex.workspace = true
+ipnet.workspace = true
+psl.workspace = true
+chrono.workspace = true
+rusqlite = { workspace = true, optional = true }

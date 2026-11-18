@@ -1,0 +1,24 @@
+[Unit]
+Description=kanmon network monitor (phase 1: observe only)
+Documentation=file:///usr/share/doc/kanmon/README.md
+After=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/kanmond --config /etc/kanmon/kanmon.toml
+Restart=always
+RestartSec=2
+# /proc/<pid>/fd を読むため root で動かす（第1弾は遮断しないので CAP_NET_ADMIN は不要）
+User=root
+Nice=5
+ProtectSystem=strict
+ReadWritePaths=/var/lib/kanmon /var/log/kanmon
+ProtectHome=read-only
+PrivateTmp=false
+NoNewPrivileges=true
+LockPersonality=true
+RestrictRealtime=true
+
+[Install]
+WantedBy=multi-user.target

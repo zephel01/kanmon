@@ -1,0 +1,14 @@
+[package]
+name = "kanmonctl"
+description = "kanmon CLI：検知ルールの検証・過去ログ再生・イベント表示・ビーコン一覧"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kanmon-core = { path = "../kanmon-core" }
+anyhow.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+chrono.workspace = true

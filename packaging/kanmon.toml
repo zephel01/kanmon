@@ -1,0 +1,55 @@
+# kanmon 設定（第1弾：監視のみ）。省略した項目は既定値。
+# Linux 既定パス：/etc/kanmon/kanmon.toml   macOS：/Library/Application Support/kanmon/etc/kanmon.toml
+
+# learning：導入直後（ベースライン作成、warn 以上だけ通知）／ observe：通常
+mode = "learning"
+learning_days = 7
+# ポーリング間隔。短いほど短命接続を拾えるが CPU を使う
+interval_ms = 500
+
+# data_dir = "/var/lib/kanmon"
+# detections_dir = "/etc/kanmon/detections"
+# rules_file = "/etc/kanmon/rules.json"
+
+# root 実行時、検知ルール・許可ルール・拒否リストは「root 所有かつ他者書込不可」でなければ読まない
+strict_owner = true
+include_loopback = false
+retention_days = 90
+beacon_report_min = 0.6
+beacon_interval_s = 300
+feeds_refresh_hours = 24
+# local_blocklists = ["/etc/kanmon/blocklist.txt"]
+
+
+[thresholds]
+notice = 30
+warn = 60
+critical = 100
+
+[jsonl]
+# path = "/var/log/kanmon/events.jsonl"
+max_mb = 50
+keep = 5
+
+[notify]
+local = true
+min_level = "notice"
+dedup_minutes = 10
+# 例：ntfy_url = "https://ntfy.sh"、ntfy_topic は推測されにくい名前に
+ntfy_url = ""
+ntfy_topic = ""
+ntfy_token = ""
+# 死活監視（healthchecks.io / Uptime Kuma の push URL 等）。途絶を外側で検知させる
+heartbeat_url = ""
+heartbeat_minutes = 5
+# このレベル以上は、閉じるまで残るダイアログ（macOS）／期限なし通知（Linux）で全文を表示
+alert_level = "warn"
+alert_timeout_s = 600
+
+[[feeds]]
+name = "feodo"
+url = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"
+
+[[feeds]]
+name = "spamhaus_drop_v4"
+url = "https://www.spamhaus.org/drop/drop_v4.json"

@@ -1,0 +1,10 @@
+target/
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+!tests/fixtures/*.jsonl
+.DS_Store
+
+# 作業用（報告書・アーカイブ等）。公開しない
+_OUTPUTS/

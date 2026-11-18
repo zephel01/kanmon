@@ -1,0 +1,22 @@
+# 追加例：「新しい事象」への対応サンプル。
+# npm / pip 等のインストール処理の配下で curl・シェルが外へ出る（インストールスクリプト経由の侵害の典型）。
+#
+# 使い方：
+#   1) kanmonctl check --detections ./detections --extra examples/detections/60-supply-chain.yaml
+#   2) kanmonctl replay --events /var/log/kanmon/events.jsonl --detections ./detections \
+#        --extra examples/detections/60-supply-chain.yaml --only X1     # 過去ログで誤検知を確認
+#   3) sudo install -o root -m 0644 examples/detections/60-supply-chain.yaml /etc/kanmon/detections/
+#      （デーモンは 5 秒以内に自動で再読込）
+detections:
+  - id: X1
+    name: pkg_install_script_network
+    points: 25
+    # パッケージマネージャ配下のシェル/ダウンローダがインターネットへ接続
+    description: パッケージ導入処理の配下から外部へ通信
+    kinds: [connect]
+    tags: [supply-chain]
+    when:
+      all:
+        - { field: network.scope, op: eq, value: internet }
+        - { field: process.parent_chain, op: in, value: [npm, npm-cli.js, npx, pnpm, yarn, bun, pip, pip3, uv, poetry, gem, cargo] }
+        - { field: process.name, op: in, value: [sh, bash, zsh, dash, curl, wget, node, python3, python] }

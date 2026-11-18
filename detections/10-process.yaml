@@ -1,0 +1,78 @@
+# プロセス側のシグナル（設計書 §9.1 の S2〜S6 ＋減点）
+detections:
+  - id: S2
+    name: unsigned_or_unmanaged
+    points: 20
+    # 未署名・ad-hoc 署名（macOS）／パッケージ管理外（Linux）
+    description: 未署名・ad-hoc 署名、またはパッケージ管理外の実行ファイル
+    kinds: [connect, accept, listen, raw_socket]
+    when:
+      all:
+        - { field: process.code_signature.status, op: in, value: [unsigned, adhoc, unmanaged] }
+        # snap / flatpak は dpkg 管理外だが配布元の署名がある
+        - not: { field: process.executable, op: prefix, value: [/snap/, /var/lib/flatpak/, /app/] }
+
+  - id: S2b
+    name: invalid_signature
+    points: 40
+    # 署名はあるが検証に失敗（改ざんの疑い。macOS の codesign --verify --strict）
+    description: 署名の検証に失敗（改ざんの疑い）
+    when: { field: process.code_signature.status, op: eq, value: invalid }
+
+  - id: S3
+    name: new_binary
+    points: 15
+    # 実行ファイルの更新が 24 時間以内
+    description: 実行ファイルが 24 時間以内に作成・更新された
+    kinds: [connect, accept, listen, raw_socket]
+    when:
+      all:
+        - { field: process.file_age_s, op: lt, value: 86400 }
+        - { field: process.code_signature.status, op: not_in, value: [apple, package] }
+
+  - id: S4
+    name: temp_dir_exec
+    points: 25
+    # 一時・ユーザー書込領域から実行
+    description: 一時フォルダ・ダウンロード等から実行されている
+    kinds: [connect, accept, listen, raw_socket]
+    when:
+      any:
+        - { field: process.executable, op: prefix, value: "@temp_dirs" }
+        - { field: process.script, op: prefix, value: "@temp_dirs" }
+
+  - id: S5
+    name: deleted_memfd_hidden
+    points: 35
+    # 実行ファイルが削除済み／memfd／隠しファイル
+    description: 実行ファイルが削除済み・メモリ上・隠しファイル
+    kinds: [connect, accept, listen, raw_socket]
+    when:
+      any:
+        - { field: process.exe_deleted, op: eq, value: true }
+        - { field: process.memfd, op: eq, value: true }
+        - { field: process.hidden, op: eq, value: true }
+
+  - id: S6
+    name: suspicious_parent
+    # 設計書の初期値は 25。単独で通知（30 以上）に届くよう 40 に引き上げ
+    points: 40
+    # 文書・メール・ブラウザ系アプリの配下でシェル/インタプリタ/ダウンローダが通信
+    description: 文書・メール・ブラウザの配下でシェル等が通信
+    kinds: [connect, listen]
+    when:
+      all:
+        - { field: process.parent_chain, op: in, value: ["@doc_apps", "@browsers"], ci: true }
+        - any:
+            - { field: process.name, op: in, value: ["@shells_interp", "@downloaders"] }
+            - { field: process.parent.name, op: in, value: "@shells_interp" }
+
+  - id: T-trusted
+    name: trusted_publisher
+    points: -15
+    # Apple 署名・ディストリ公式パッケージ（減点）。curl・bash 等の「正規ツールの悪用」に使われるものは減点しない
+    description: Apple 署名・公式パッケージ（減点）
+    when:
+      all:
+        - { field: process.code_signature.status, op: in, value: [apple, package] }
+        - { field: process.name, op: not_in, value: ["@shells_interp", "@downloaders"] }
