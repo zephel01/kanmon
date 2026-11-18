@@ -95,7 +95,7 @@ detections:
         - { field: process.parent_chain, op: in, value: [npm, pip, pip3, uv, cargo] }
         - { field: process.name, op: in, value: [sh, bash, curl, wget] }
 ```
-93 rules ship by default: general techniques (S1–S18), developer-targeted ones (D1–D12: remote-access tools, tunnels, exposed dev servers, network activity during package installs, exfiltration-friendly services, AI CLIs talking to unofficial endpoints, blockchain RPC endpoints, and more), DNS tampering (N1–N6: hosts file edits, resolver changes, DoH cross-check, and more), upload volume (V1–V9), persistence (P1–P7, PW), persistence-then-send correlation (C1, C2) and package update inspection (I1–I20, IC1–IC4). The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
+100 rules ship by default: general techniques (S1–S18), developer-targeted ones (D1–D12: remote-access tools, tunnels, exposed dev servers, network activity during package installs, exfiltration-friendly services, AI CLIs talking to unofficial endpoints, blockchain RPC endpoints, and more), DNS tampering (N1–N6: hosts file edits, resolver changes, DoH cross-check, and more), upload volume (V1–V9), persistence (P1–P7, PW), persistence-then-send correlation (C1, C2) and package update inspection (I1–I25, IC1–IC6). The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
 
 ## Check Python startup hooks (.pth)
 As the November 2026 agent-framework compromise on PyPI showed, a single line in a `.pth` file runs code every time Python starts. List the ones on your machine (read-only):

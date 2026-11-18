@@ -88,4 +88,4 @@ detections:
         - { field: kanmon.inspect.features, op: in, value: [obfuscation] }
         - { field: kanmon.inspect.features, op: in, value: [install_script, dep_from_url, new_top_level, pth_exec] }
   - { id: I24, name: new_dependency, points: 5, kinds: [inspect], description: "依存が増えた", when: { field: kanmon.inspect.features, op: in, value: [new_dependency] } }
-  - { id: I25, name: new_dep_young, points: 40, kinds: [inspect], description: "増えた依存が、出来たばかり（30 日以内）か、レジストリに無い（本体を依存に置く手口）", when: { field: kanmon.inspect.features, op: in, value: [new_dep_young] } }
+  - { id: I25, name: new_dep_young, points: 55, kinds: [inspect], description: "増えた依存が、出来たばかり（30 日以内）か、レジストリに無い（本体を依存に置く手口）", when: { field: kanmon.inspect.features, op: in, value: [new_dep_young] } }
