@@ -2,12 +2,12 @@
 
 # kanmon（関門）
 
-**新しい手口に自分で追いつける、macOS / Linux 向けのプロセス単位の通信監視ツール**
+**新しい手口に自分で追いつける、macOS / Linux / Windows（beta）向けのプロセス単位の通信監視ツール**
 
 [![CI](https://github.com/zephel01/kanmon/actions/workflows/ci.yml/badge.svg)](https://github.com/zephel01/kanmon/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.0--beta.1-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20(beta)-lightgrey)
 ![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)
 
 日本語 | [English](README.en.md)
@@ -41,6 +41,7 @@ kanmon は端末から出入りする通信を 1 本ずつ調べて、次の 2 �
 - 📦 **送信量の検知**：送った量を、開いているファイル（`.env`・`.git` の中身・GGUF 等）と宛先と合わせて判定します。モデルのアップロードのような正当な大量送信と、持ち出しを分けます
 - 🛡️ **脅威インテル**：Feodo Tracker・Spamhaus DROP・ローカルの拒否リストと照合します
 - 🖥️ **メニューバーアプリ（macOS）**：盾のアイコンの色で状態が分かります（緑＝正常、黄＝注意、赤＝警告、灰＝停止）。件数を押すとレベル別の一覧が開き、ルールで絞り込めます。警告は詳細ウィンドウで全文を表示します
+- 🪟 **Windows 版（beta）**：Sysmon の記録（プロセスの起動・接続・DNS）を読み、同じ YAML のルールで判定します。通知領域のアイコン（トレイ）とトースト通知、導入は `kanmon-setup.ps1` 1 本（Sysmon の導入も含む）。詳しくは [docs/windows.md](docs/windows.md)
 - 🔒 **自分の身も守る**：root 所有でないルールは読みません。通知は引数で渡すので注入できません。外部の死活監視とも連携できます
 
 ## クイックスタート
@@ -58,6 +59,20 @@ sudo packaging/install-macos.sh
 git clone https://github.com/zephel01/kanmon.git && cd kanmon
 cargo build --release
 sudo packaging/install-linux.sh
+```
+
+**Linux のパッケージ（.deb・.rpm）**
+[リリース](https://github.com/zephel01/kanmon/releases)から取って入れます（glibc 2.35 以上。Ubuntu 22.04・Debian 12 以降等）。
+```bash
+sudo apt install ./kanmon_0.4.0~beta.1-1_amd64.deb      # Debian・Ubuntu
+sudo dnf install ./kanmon-0.4.0~beta.1-1.x86_64.rpm     # Fedora・RHEL 系
+sudo systemctl enable --now kanmond
+```
+
+**Windows（beta、Windows 11 x64 で確認）**
+[リリース](https://github.com/zephel01/kanmon/releases)の `kanmon-<版>-windows-x64.zip` を展開して、次を実行します。Sysmon が無ければ入れます。手順と制限は [docs/windows.md](docs/windows.md) を見てください。
+```powershell
+powershell -ExecutionPolicy Bypass -File .\kanmon-0.4.0-beta.1-windows-x64\kanmon-setup.ps1
 ```
 
 **メニューバーアプリ（macOS 13 以降）**
@@ -129,6 +144,7 @@ kanmonctl inspect --file ./pkg-1.1.whl --base-file ./pkg-1.0.whl --detections �
 | [docs/detections.md](docs/detections.md) | 検知ルールの書き方、フィールド一覧、同梱ルール |
 | [docs/configuration.md](docs/configuration.md) | 設定、CLI、許可/拒否ルール、保存先 |
 | [docs/inspect.md](docs/inspect.md) | パッケージの更新の検査（`kanmonctl inspect`）の仕組み・特徴・点数 |
+| [docs/windows.md](docs/windows.md) | Windows 版（beta）の導入・しくみ・制限・報告の仕方 |
 | [docs/design-v1.md](docs/design-v1.md) | 設計書（脅威モデル・アーキテクチャ・ロードマップ） |
 | [CHANGELOG.md](CHANGELOG.md) | 変更履歴 |
 
@@ -139,6 +155,7 @@ kanmonctl inspect --file ./pkg-1.1.whl --base-file ./pkg-1.0.whl --detections �
 - [ ] macOS での遮断（Network Extension、実行中プロセスの署名検証）
 - [x] 宛先のドメイン名（DNS 応答・SNI の受け身の観測）と DNS の改ざん検知（hosts・DNS サーバー設定・DoH での照合）
 - [ ] 送信量の急増検知、新規登録ドメイン（NRD）フィード
+- [x] Windows 版（beta、Sysmon を読む・トレイ）と Linux のパッケージ（.deb・.rpm）
 - [ ] Web UI、syslog / SIEM 連携
 
 ## 既知の限界
@@ -146,6 +163,7 @@ kanmonctl inspect --file ./pkg-1.1.whl --base-file ./pkg-1.0.whl --detections �
 - ドメイン名は DNS 応答と SNI から付けるので、**名前が分からない接続**があります（QUIC、ECH で SNI が隠れた接続、kanmon の起動前に引かれた名前、DNS over HTTPS を自前で使うアプリ）
 - root を取られた後は止められてしまいます。`heartbeat_url` で外側から死活を監視してください
 - コンテナや別の network namespace の通信は対象外です
+- Windows 版（beta）は送信量を取りません。つながらなかった接続は Sysmon に出ないので見えません（[docs/windows.md](docs/windows.md)）
 
 ## コントリビュート
 - Issue・PR を歓迎します。開発ルールは [CLAUDE.md](CLAUDE.md) にあります（テストの宛先は RFC 5737 の文書用 IP に限る、など）

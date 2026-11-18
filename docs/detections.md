@@ -55,9 +55,9 @@ detections:
 | フィールド | 内容 |
 |---|---|
 | `network.kind` / `direction` / `transport` / `scope` | 種別（connect / accept / listen / raw_socket / beacon_report / dns_integrity / bytes_report / persistence / inspect）、方向、tcp / udp / raw / packet / dns、loopback / lan / internet / all |
-| `process.executable` / `name` / `args` / `user` / `uid` | 実行ファイル、引数、ユーザー |
-| `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / adhoc / unsigned / package / unmanaged / unknown |
-| `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
+| `process.executable` / `name` / `args` / `user` / `uid` | 実行ファイル、引数、ユーザー（Windows の `name` は小文字にそろえる：`powershell.exe`。`args` は Sysmon のコマンドラインを分けたもの。`uid` は無い） |
+| `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / adhoc / unsigned / package / unmanaged / unknown（Windows は microsoft / signed_other / unsigned / invalid / unknown。カタログ署名を含む） |
+| `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名（Windows は team_id に署名者の名前（CN）。signing_id は使わない） |
 | `process.hash.sha256` / `proc_key` | ハッシュ、安定識別キー |
 | `process.parent.name` / `parent_chain` | 親プロセス、親から上へ最大 6 段の実行ファイル名。インタプリタはスクリプト名も入る（`node …/npm-cli.js` → `node`・`npm-cli.js`、`python -m pip` → `pip`） |
 | `process.exe_deleted` / `memfd` / `hidden` / `interpreter` / `script` | 削除済み、メモリ上（memfd）、隠しファイル、インタプリタとスクリプト |
@@ -96,7 +96,9 @@ detections:
 | S14 | ブラウザ以外が DNS を迂回（DoH / DoT） | +15 |
 | S15 / S16 / S17 | 新しい待受を外部に公開 / インターネットから着信 / raw ソケット | +25 / +30 / +20 |
 | S18 | トンネル・動的 DNS 系ドメイン | +10 |
-| T-trusted | Apple 署名・公式パッケージ（curl・bash・ssh 等は除く） | −15 |
+| T-trusted | Apple 署名・公式パッケージ・Microsoft 署名（curl・bash・PowerShell・LOLBin・ssh 等は除く） | −15 |
+| W1 | Windows：悪用されやすい標準のコマンド（rundll32・regsvr32・mshta・certutil 等、`@lolbins`）がインターネットへ接続 | +40 |
+| W2 | Windows：PowerShell の `-EncodedCommand`（`-e`・`-enc` 等の短い形も） | +30 |
 
 ### 開発者を狙う手口（`40-developer.yaml`）
 | ID | 内容 | 点 |

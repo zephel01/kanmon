@@ -1,0 +1,7 @@
+#!/bin/sh
+# 削除するときだけ止める（更新のときは止めない。postinst が再起動する）
+set -e
+if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+  systemctl disable --now kanmond >/dev/null 2>&1 || true
+fi
+exit 0

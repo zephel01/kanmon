@@ -1,0 +1,57 @@
+name: 動作報告（beta）
+description: Windows 版・Linux のパッケージ等の beta の動作報告、誤検知、出てほしいのに出なかったもの
+title: "[beta] "
+labels: ["beta-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        報告ありがとうございます。貼る前に、ユーザー名・ホスト名・社内のドメイン・IP などが入っていないか確かめてください。
+        Windows は `kanmon-setup.ps1 -CheckOnly -Json` の出力を貼ると、伏せた形で環境が分かります。
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 報告の種類
+      options:
+        - 動作した（環境の報告）
+        - 導入でつまずいた
+        - 誤検知（出なくてよい通知が出た）
+        - 見逃し（出てほしい通知が出なかった）
+        - その他
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: kanmon の版
+      placeholder: 0.4.0-beta.1
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS と版（アーキテクチャ）
+      placeholder: Windows 11 Pro 26H2（x64）／ Ubuntu 24.04（x86_64）
+    validations:
+      required: true
+  - type: input
+    id: sysmon
+    attributes:
+      label: Sysmon（Windows のみ）
+      description: 組み込み版か Sysinternals 版か、版、kanmon 用の設定か自分の設定か
+      placeholder: 組み込み版 10.0.26100.9949、kanmon 用の設定
+  - type: textarea
+    id: check
+    attributes:
+      label: 確認の結果
+      description: Windows は `kanmon-setup.ps1 -CheckOnly -Json`、Linux は `systemctl status kanmond` と `kanmonctl status`
+      render: json
+  - type: textarea
+    id: alerts
+    attributes:
+      label: 通知・警告（誤検知・見逃しのとき）
+      description: "`kanmonctl alerts` の該当行（ルール ID・レベル・点数）と、そのとき何をしていたか"
+  - type: textarea
+    id: notes
+    attributes:
+      label: そのほか（導入でつまずいた点、こうなってほしい点）

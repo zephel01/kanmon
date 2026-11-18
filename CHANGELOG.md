@@ -6,6 +6,26 @@
 
 ## [Unreleased]
 
+## [0.4.0-beta.1] - 2026-11-19
+Windows 版（beta）と Linux のパッケージ。監視と通知だけで、止めることはしない。動作の報告を Issue の「動作報告（beta）」で集める。
+
+### 追加
+- **Windows 版（beta）**（`docs/windows.md`）
+  - Sysmon の記録（`Microsoft-Windows-Sysmon/Operational`）を購読して、短い接続（ID 3）・DNS の名前とどのプロセスが引いたか（ID 22）・親とコマンドライン（ID 1）を取る。接続の一覧は `GetExtendedTcpTable`・`GetExtendedUdpTable`
+  - 署名は `Get-AuthenticodeSignature`（カタログ署名を含む）：`microsoft` / `signed_other` / `unsigned` / `invalid`
+  - 居座り：Run・RunOnce（全ユーザー）・Winlogon・IFEO の Debugger・自動起動のサービス・スタートアップ・タスク スケジューラ・PowerShell のプロファイル・Windows の Python の `.pth`。Sysmon が自動起動の場所の変更を記録したら走査を早める
+  - サービス（`kanmond --service`）。通知は Windows のイベントログ（ソース `kanmon`）と Webhook・ntfy
+  - トレイ（`kanmon-tray.exe`）：通知領域のアイコン（平常・注意・警告・停止）、直近の警告と詳細、確認済み、通知の一時停止、warn 以上のトースト。状態パイプ `\\.\pipe\kanmon`（読むだけ。ACL で対話ユーザーに限り、リモートは拒否）
+  - 導入スクリプト `kanmon-setup.ps1`：確認・Sysmon の導入（Windows 11 の組み込み版があればそれ、無ければ winget）と kanmon 用の設定・kanmon とトレイの導入・アンインストールを 1 本で。`-CheckOnly -Json` で報告用の伏せた結果
+  - 検知ルール：`W1`（LOLBin がインターネットへ）、`W2`（PowerShell の `-EncodedCommand`）。各リストに Windows のプロセス名、`@lolbins`。Microsoft 署名は減点（T-trusted）の側。`S4` は大文字小文字を区別しない。`~/` の前方一致は `C:\Users\<名前>\` にも当たる
+- **Linux のパッケージ**：`.deb`・`.rpm`（ubuntu-22.04 でビルド、glibc 2.35 以上）。`/usr/sbin/kanmond`・`/usr/bin/kanmonctl`・`/etc/kanmon`（設定とルールは更新で上書きしない）。自動では起動しない
+- リリース：版に `-` が付くものはプレリリース。Windows の zip と Linux のパッケージをリリースに添付する
+- Issue テンプレート「動作報告（beta）」
+
+### 既知の制限（Windows beta）
+- つながらなかった接続は Sysmon に出ないので見えない。送信量（55-volume）は取らない。DNS サーバーの変更（N2）と DoH での照合（N3）は動かない
+- コード署名・MSI・winget のパッケージは無い
+
 ## [0.3.1] - 2026-11-19
 `kanmonctl inspect` を実物の悪性パッケージで評価して見方を足した。Webhook での通知。
 

@@ -27,6 +27,40 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # Windows は DNS・SNI のパケット観測（libpcap）を使わない（Sysmon から読む）
+      - run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+      - run: cargo test --workspace --no-default-features
+      - run: cargo build --release --no-default-features -p kanmond -p kanmonctl -p kanmon-tray
+      - name: kanmond の起動の確認（--help・--version）
+        run: |
+          target\release\kanmond.exe --version
+          target\release\kanmonctl.exe --version
+      - name: 導入スクリプトの構文（PowerShell 7 と Windows PowerShell 5.1）
+        shell: pwsh
+        run: |
+          $errs = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\packaging\windows\kanmon-setup.ps1", [ref]$null, [ref]$errs)
+          if ($errs) { $errs | ForEach-Object { Write-Error $_ }; exit 1 }
+          $bom = [IO.File]::ReadAllBytes("$PWD\packaging\windows\kanmon-setup.ps1")[0..2]
+          if (-not ($bom[0] -eq 0xEF -and $bom[1] -eq 0xBB -and $bom[2] -eq 0xBF)) { Write-Error 'kanmon-setup.ps1 は BOM 付き UTF-8 にする（5.1 が日本語を読み違える）'; exit 1 }
+      - name: 導入スクリプトを確認だけで実行（5.1。例外で止まらず JSON が出るか）
+        shell: pwsh
+        run: |
+          $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File packaging\windows\kanmon-setup.ps1 -CheckOnly -NoProbe -Json | Out-String
+          $j = $out | ConvertFrom-Json
+          if (-not $j.results) { Write-Error "結果が無い：$out"; exit 1 }
+          $j.results | Format-Table Area, Check, Status, Detail -AutoSize | Out-String -Width 200 | Write-Host
+      - name: 配布物の zip を作れるか
+        shell: pwsh
+        run: ./.github/scripts/package-windows.ps1 -Version ci
+
   macos-app:
     runs-on: macos-latest
     steps:

@@ -2,12 +2,12 @@
 
 # kanmon
 
-**A per-process network monitor for macOS and Linux that you can teach new attack patterns yourself**
+**A per-process network monitor for macOS, Linux and Windows (beta) that you can teach new attack patterns yourself**
 
 [![CI](https://github.com/zephel01/kanmon/actions/workflows/ci.yml/badge.svg)](https://github.com/zephel01/kanmon/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.0--beta.1-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
-![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows%20(beta)-lightgrey)
 ![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)
 
 [日本語](README.md) | English
@@ -43,6 +43,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 - 📡 **Beacon detection**: statistical periodicity scoring catches C2 check-ins, including ones relayed through legitimate cloud services
 - 🛡️ **Threat intel**: matches against Feodo Tracker, Spamhaus DROP and your own blocklists
 - 🖥️ **Menu bar app (macOS)**: a shield icon whose color shows the state (green = OK, yellow = notice, red = alert, gray = daemon down). Click the counts to open a per-level list you can filter by rule. Alerts open in a detail window with the full text
+- 🪟 **Windows (beta)**: reads Sysmon's records (process creation, connections, DNS) and judges them with the same YAML rules. A notification-area (tray) icon with toast notifications; one script, `kanmon-setup.ps1`, installs everything including Sysmon. See [docs/windows.md](docs/windows.md) (Japanese)
 - 🔒 **Hardened**: refuses rule files that are not owned by root, passes notification text as arguments so it cannot be injected, and supports an external dead-man heartbeat
 
 ## Quick start
@@ -53,6 +54,18 @@ git clone https://github.com/zephel01/kanmon.git && cd kanmon
 cargo build --release
 sudo packaging/install-macos.sh     # macOS (launchd)
 sudo packaging/install-linux.sh     # Linux (systemd)
+```
+
+Linux packages (.deb / .rpm, glibc 2.35+: Ubuntu 22.04, Debian 12 and later, etc.) from the [releases](https://github.com/zephel01/kanmon/releases):
+```bash
+sudo apt install ./kanmon_0.4.0~beta.1-1_amd64.deb      # Debian / Ubuntu
+sudo dnf install ./kanmon-0.4.0~beta.1-1.x86_64.rpm     # Fedora / RHEL family
+sudo systemctl enable --now kanmond
+```
+
+Windows (beta, tested on Windows 11 x64): unpack `kanmon-<version>-windows-x64.zip` from the [releases](https://github.com/zephel01/kanmon/releases) and run the script below. It installs Sysmon if needed. Steps and limitations: [docs/windows.md](docs/windows.md).
+```powershell
+powershell -ExecutionPolicy Bypass -File .\kanmon-0.4.0-beta.1-windows-x64\kanmon-setup.ps1
 ```
 
 Menu bar app (macOS 13+, no sudo, starts at login):
@@ -119,6 +132,7 @@ It downloads the given version and the previous one from the registry (PyPI or n
 - [ ] macOS blocking (Network Extension, dynamic code-signature checks)
 - [x] Domain names for destinations (passive DNS/SNI observation) and DNS tampering detection (hosts file, resolver settings, DoH cross-check)
 - [ ] Exfiltration volume detection, newly-registered-domain feeds
+- [x] Windows (beta: reads Sysmon, tray icon) and Linux packages (.deb / .rpm)
 - [ ] Web UI, syslog / SIEM integration
 
 ## Known limitations
@@ -126,6 +140,7 @@ It downloads the given version and the previous one from the registry (PyPI or n
 - Domain names come from observed DNS responses and TLS SNI, so **some connections stay unnamed** (QUIC, ECH-hidden SNI, names resolved before kanmon started, apps doing their own DNS over HTTPS)
 - An attacker with root can disable kanmon. Configure `heartbeat_url` so an outside service notices when it stops
 - Traffic in other network namespaces (containers) is not covered
+- The Windows beta does not measure upload volume, and connections that fail never show up in Sysmon, so they are not seen ([docs/windows.md](docs/windows.md))
 
 ## Contributing & security
 - Issues and PRs are welcome. Tests must only target RFC 5737 documentation addresses, localhost, or hosts you own

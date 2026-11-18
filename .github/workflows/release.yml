@@ -1,5 +1,9 @@
 name: release
-# バージョンを上げた変更が main に入ったら、タグ v<版> とリリースを作る（本文は CHANGELOG の該当節）
+# バージョンを上げた変更が main に入ったら、タグ v<版> とリリースを作る（本文は CHANGELOG の該当節）。
+# 版に - が付くもの（0.4.0-beta.1 等）はプレリリース。続けて配布物を作って上げる：
+#   Windows：kanmon-<版>-windows-x64.zip（windows-latest、MSVC）
+#   Linux：kanmon_<版>_amd64.deb・kanmon-<版>-1.x86_64.rpm（ubuntu-22.04 でビルド。glibc 2.35 以上で動く）
+# 配布物が既に上がっている版では何もしない（何度実行してもよい）
 on:
   push:
     branches: [main]
@@ -12,6 +16,10 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      ver: ${{ steps.v.outputs.ver }}
+      need_windows: ${{ steps.v.outputs.need_windows }}
+      need_linux: ${{ steps.v.outputs.need_linux }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,3 +28,63 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash .github/scripts/release.sh
+      - name: 配布物が要るか
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          if ! gh release view "v$ver" >/dev/null 2>&1; then
+            echo "need_windows=false" >> "$GITHUB_OUTPUT"; echo "need_linux=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          assets=$(gh release view "v$ver" --json assets -q '.assets[].name')
+          if echo "$assets" | grep -q "windows-x64.zip$"; then echo "need_windows=false"; else echo "need_windows=true"; fi >> "$GITHUB_OUTPUT"
+          if echo "$assets" | grep -q "\.deb$"; then echo "need_linux=false"; else echo "need_linux=true"; fi >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: release
+    if: needs.release.outputs.need_windows == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.ver }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: ビルド（DNS・SNI のパケット観測は使わない。Windows は Sysmon から読む）
+        run: cargo build --release --no-default-features -p kanmond -p kanmonctl -p kanmon-tray
+      - name: zip を作る
+        shell: pwsh
+        run: ./.github/scripts/package-windows.ps1 -Version '${{ needs.release.outputs.ver }}'
+      - name: リリースに上げる
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "v${{ needs.release.outputs.ver }}" (Get-ChildItem dist -File -Filter 'kanmon-*.zip*').FullName --clobber
+
+  linux:
+    needs: release
+    if: needs.release.outputs.need_linux == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.ver }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: libpcap
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: ビルド
+        run: cargo build --release -p kanmond -p kanmonctl
+      - name: パッケージ（.deb・.rpm）
+        run: |
+          cargo install cargo-deb cargo-generate-rpm --locked
+          ver='${{ needs.release.outputs.ver }}'
+          cargo deb -p kanmond --no-build
+          # rpm の版には - が使えないので ~ にする（0.4.0-beta.1 → 0.4.0~beta.1。~ は正式版より前に並ぶ）
+          cargo generate-rpm -p crates/kanmond --set-metadata "version = \"${ver//-/\~}\""
+          mkdir -p dist && cp target/debian/*.deb target/generate-rpm/*.rpm dist/
+          (cd dist && sha256sum *.deb *.rpm > SHA256SUMS-linux.txt && cat SHA256SUMS-linux.txt)
+      - name: リリースに上げる
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "v${{ needs.release.outputs.ver }}" dist/* --clobber

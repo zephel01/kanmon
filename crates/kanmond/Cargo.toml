@@ -51,3 +51,41 @@ rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"]
 default = ["capture"]
 # DNS・SNI の受け身の観測（libpcap が必要。Linux では libpcap-dev）
 capture = ["dep:pcap"]
+
+# Linux のパッケージ（cargo-deb・cargo-generate-rpm）。リリースのときに CI で作る
+[package.metadata.deb]
+name = "kanmon"
+maintainer = "kanmon contributors"
+copyright = "kanmon contributors"
+license-file = ["../../LICENSE", "0"]
+extended-description = "Per-process network monitor for developer machines (observe and notify only)."
+section = "net"
+priority = "optional"
+depends = "libpcap0.8t64 | libpcap0.8, libc6 (>= 2.35)"
+maintainer-scripts = "../../packaging/linux/debian"
+assets = [
+  ["target/release/kanmond", "usr/sbin/", "755"],
+  ["target/release/kanmonctl", "usr/bin/", "755"],
+  ["../../packaging/linux/kanmond.service", "lib/systemd/system/", "644"],
+  ["../../packaging/kanmon.toml", "etc/kanmon/kanmon.toml", "644"],
+  ["../../detections/*.yaml", "etc/kanmon/detections/", "644"],
+  ["../../README.md", "usr/share/doc/kanmon/", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "kanmon"
+summary = "Per-process network monitor (observe and notify only)"
+assets = [
+  { source = "target/release/kanmond", dest = "/usr/sbin/kanmond", mode = "755" },
+  { source = "target/release/kanmonctl", dest = "/usr/bin/kanmonctl", mode = "755" },
+  { source = "../../packaging/linux/kanmond.service", dest = "/usr/lib/systemd/system/kanmond.service", mode = "644" },
+  { source = "../../packaging/kanmon.toml", dest = "/etc/kanmon/kanmon.toml", mode = "644", config = "noreplace" },
+  { source = "../../detections/*.yaml", dest = "/etc/kanmon/detections/", mode = "644", config = true },
+  { source = "../../README.md", dest = "/usr/share/doc/kanmon/README.md", mode = "644", doc = true },
+]
+post_install_script = "../../packaging/linux/debian/postinst"
+pre_uninstall_script = "../../packaging/linux/rpm-preun"
+
+[package.metadata.generate-rpm.requires]
+libpcap = "*"
+
