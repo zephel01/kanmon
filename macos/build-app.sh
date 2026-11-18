@@ -26,4 +26,4 @@ else
   codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
 fi
 codesign --verify --strict --verbose=1 "$APP"
-echo "作成：$(pwd)/$APP（version $VERSION、署名：$SIGN_ID）"
+echo "作成：$(pwd)/${APP}（version ${VERSION}、署名：${SIGN_ID}）"
