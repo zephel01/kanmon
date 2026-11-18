@@ -3,14 +3,14 @@ import XCTest
 
 /// kanmond（Rust）との取り決めのテスト。Rust 側も同じ tests/fixtures/status-snapshot.json を検証する。
 final class SnapshotDecodeTests: XCTestCase {
-    func fixture() throws -> Data {
+    func fixture(_ name: String = "status-snapshot.json") throws -> Data {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // KanmonBarTests
             .deletingLastPathComponent()   // Tests
             .deletingLastPathComponent()   // KanmonBar
             .deletingLastPathComponent()   // macos
             .deletingLastPathComponent()   // リポジトリのルート
-            .appendingPathComponent("tests/fixtures/status-snapshot.json")
+            .appendingPathComponent("tests/fixtures/\(name)")
         return try Data(contentsOf: url)
     }
 
@@ -24,6 +24,17 @@ final class SnapshotDecodeTests: XCTestCase {
         XCTAssertEqual(s.alerts.first?.level, "critical")
         XCTAssertTrue(s.alerts.first?.isSevere ?? false)
         XCTAssertNotNil(Fmt.date(s.alerts.first?.ts))
+    }
+
+    func testDecodesAlertList() throws {
+        let l = try StatusClient.decodeAlertList(try fixture("status-alerts.json"))
+        XCTAssertEqual(l.level, "notice")
+        XCTAssertEqual(l.hours, 24)
+        XCTAssertEqual(l.alerts.count, 2)
+        XCTAssertEqual(l.alerts.first?.rules, ["N3"])
+        XCTAssertNil(l.alerts.last?.rules)   // rules が無い警告も読める
+        XCTAssertEqual(l.byRule["N3"], 1)
+        XCTAssertFalse(l.truncated)
     }
 
     func testDecodesWithoutOptionalFields() throws {

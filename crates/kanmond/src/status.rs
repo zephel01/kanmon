@@ -3,6 +3,8 @@
 //! - Unix ドメインソケット。1 行の JSON 要求に 1 行の JSON で答えて閉じる
 //!   - `{"cmd":"status"}` → 状態スナップショット
 //!   - `{"cmd":"ping"}`   → `{"ok":true}`
+//!   - `{"cmd":"alerts","level":"notice","hours":24,"limit":500}` → 期間内の警告の一覧とルール別の件数
+//!     （DB を読み取り専用で開いて読む。level は all / notice / warn / critical）
 //! - 設定は変更できない（読み取り専用）。モード変更などは管理者認証つきの別経路で行う
 //! - 接続相手の uid を検証する：root・ログイン中のユーザー・`status_allowed_uids` のみ
 //! - アプリが接続している間（直近 15 秒以内に要求あり）は、OS ローカル通知をアプリに任せる
@@ -31,6 +33,77 @@ pub struct AlertItem {
     pub kind: String,
     pub title: String,
     pub body: String,
+    /// 当たった検知ルールの ID（一覧での絞り込み・件数の集計用）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<String>,
+}
+
+/// イベントの JSON から、当たった検知ルールの ID を取り出す
+pub fn signal_ids(v: &serde_json::Value) -> Vec<String> {
+    kanmon_core::event::get_path(v, "kanmon.signals")
+        .and_then(|x| x.as_array())
+        .map(|a| a.iter().filter_map(|h| h.get("id").and_then(|i| i.as_str()).map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// 保存済みイベントから状態ソケット用の警告を作る（DB からの読み戻し・一覧用）
+pub fn alert_item_from_event(v: &serde_json::Value) -> Option<AlertItem> {
+    let s = |p: &str| kanmon_core::event::get_path(v, p).and_then(|x| x.as_str()).map(str::to_string);
+    let level = s("kanmon.level")?;
+    let (title, body) = kanmon_core::format::alert_text(v);
+    Some(AlertItem {
+        id: s("event.id")?,
+        ts: s("@timestamp").unwrap_or_default(),
+        score: kanmon_core::event::get_path(v, "kanmon.score").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+        kind: s("network.kind").unwrap_or_default(),
+        level,
+        title,
+        body,
+        rules: signal_ids(v),
+    })
+}
+
+/// `{"cmd":"alerts"}` の応答
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct AlertList {
+    pub level: String,
+    pub hours: i64,
+    /// 新しい順
+    pub alerts: Vec<AlertItem>,
+    /// ルール ID ごとの件数（返した警告の中で）
+    pub by_rule: BTreeMap<String, i64>,
+    /// 上限で切ったか
+    pub truncated: bool,
+}
+
+const MAX_LIST: i64 = 2000;
+
+fn list_alerts(db: &Path, req: &serde_json::Value) -> Result<AlertList> {
+    let level = req.get("level").and_then(|v| v.as_str()).unwrap_or("all");
+    let levels: Vec<&str> = match level {
+        "notice" | "warn" | "critical" => vec![level],
+        _ => vec!["notice", "warn", "critical"],
+    };
+    let hours = req.get("hours").and_then(|v| v.as_i64()).unwrap_or(24).clamp(1, 24 * 30);
+    let limit = req.get("limit").and_then(|v| v.as_i64()).unwrap_or(500).clamp(1, MAX_LIST);
+    let store = kanmon_core::store::Store::open_readonly(db)?;
+    let since = chrono::Utc::now().timestamp() - hours * 3600;
+    let evs = store.recent_events(since, &levels, limit + 1)?;
+    let truncated = evs.len() as i64 > limit;
+    let alerts: Vec<AlertItem> = evs.iter().take(limit as usize).filter_map(alert_item_from_event).collect();
+    let mut by_rule = BTreeMap::new();
+    for a in &alerts {
+        for r in &a.rules {
+            *by_rule.entry(r.clone()).or_insert(0) += 1;
+        }
+    }
+    Ok(AlertList {
+        level: if levels.len() == 1 { level.into() } else { "all".into() },
+        hours,
+        alerts,
+        by_rule,
+        truncated,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -56,11 +129,18 @@ pub struct Snapshot {
 pub struct Shared {
     snap: Mutex<Snapshot>,
     last_client: AtomicI64,
+    /// 警告の一覧（`alerts`）を読む DB
+    db: Option<PathBuf>,
 }
 
 impl Shared {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn new(base: Snapshot) -> Arc<Self> {
-        Arc::new(Self { snap: Mutex::new(base), last_client: AtomicI64::new(0) })
+        Self::with_db(base, None)
+    }
+
+    pub fn with_db(base: Snapshot, db: Option<PathBuf>) -> Arc<Self> {
+        Arc::new(Self { snap: Mutex::new(base), last_client: AtomicI64::new(0), db })
     }
 
     pub fn update<F: FnOnce(&mut Snapshot)>(&self, f: F) {
@@ -92,10 +172,17 @@ impl Shared {
 
 /// 要求 1 行に対する応答（純関数。テスト用に分離）
 pub fn respond(req: &str, shared: &Shared) -> String {
-    let cmd = serde_json::from_str::<serde_json::Value>(req.trim())
-        .ok()
-        .and_then(|v| v.get("cmd").and_then(|c| c.as_str()).map(str::to_string));
+    let parsed = serde_json::from_str::<serde_json::Value>(req.trim()).unwrap_or_default();
+    let cmd = parsed.get("cmd").and_then(|c| c.as_str()).map(str::to_string);
     match cmd.as_deref() {
+        Some("alerts") => {
+            shared.touch_client();
+            let Some(db) = &shared.db else { return r#"{"error":"no database"}"#.into() };
+            match list_alerts(db, &parsed) {
+                Ok(l) => serde_json::to_string(&l).unwrap_or_else(|_| r#"{"error":"serialize"}"#.into()),
+                Err(e) => serde_json::json!({ "error": format!("{e:#}") }).to_string(),
+            }
+        }
         Some("status") => {
             shared.touch_client();
             serde_json::to_string(&shared.snapshot()).unwrap_or_else(|_| r#"{"error":"serialize"}"#.into())
@@ -218,7 +305,45 @@ mod tests {
             kind: "connect".into(),
             title: "t".into(),
             body: "b".into(),
+            rules: vec![],
         }
+    }
+
+    #[test]
+    fn alerts_command_reads_db() {
+        let dir = std::env::temp_dir().join(format!("kanmon-status-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("kanmon.db");
+        let _ = std::fs::remove_file(&db);
+        {
+            let st = kanmon_core::store::Store::open(&db).unwrap();
+            let now = chrono::Utc::now().timestamp();
+            for (i, (lv, rule)) in
+                [("notice", "N3"), ("notice", "N3"), ("warn", "D9"), ("info", "S12")].iter().enumerate()
+            {
+                let v = serde_json::json!({
+                    "@timestamp": "2026-11-18T16:00:00+09:00", "event": {"id": format!("e{i}")},
+                    "network": {"kind": "connect"},
+                    "kanmon": {"level": lv, "score": 40, "signals": [{"id": rule, "name": "x", "points": 40}]}
+                });
+                st.insert_event(&v, now - i as i64).unwrap();
+            }
+        }
+        let sh = Shared::with_db(Snapshot::default(), Some(db.clone()));
+        let v: serde_json::Value = serde_json::from_str(&respond(r#"{"cmd":"alerts","level":"notice"}"#, &sh)).unwrap();
+        assert_eq!(v["alerts"].as_array().unwrap().len(), 2, "{v}");
+        assert_eq!(v["by_rule"]["N3"], 2);
+        assert_eq!(v["alerts"][0]["rules"][0], "N3");
+        let v: serde_json::Value = serde_json::from_str(&respond(r#"{"cmd":"alerts","limit":1}"#, &sh)).unwrap();
+        assert_eq!(v["level"], "all");
+        assert_eq!(v["truncated"], true);
+        // Swift 側と同じ形か（取り決めのフィクスチャ）
+        let fx: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/status-alerts.json")).unwrap();
+        for k in ["level", "hours", "alerts", "by_rule", "truncated"] {
+            assert!(fx.get(k).is_some() && v.get(k).is_some(), "{k}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -250,6 +375,7 @@ mod tests {
             kind: "connect".into(),
             title: "kanmon CRITICAL 160点: updater → 198.51.100.7:443".into(),
             body: "【理由】合計 160 点（critical）".into(),
+            rules: vec![],
         });
         let snap = Snapshot {
             version: "0.1.0".into(),

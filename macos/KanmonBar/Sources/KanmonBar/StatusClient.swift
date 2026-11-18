@@ -41,6 +41,32 @@ enum StatusClient {
         }
     }
 
+    /// 警告の一覧（level は all / notice / warn / critical）
+    static func fetchAlerts(path: String = defaultPath, level: String, hours: Int = 24, limit: Int = 1000)
+        -> Result<AlertList, Failure>
+    {
+        let lv = ["all", "notice", "warn", "critical"].contains(level) ? level : "all"
+        let line = "{\"cmd\":\"alerts\",\"level\":\"\(lv)\",\"hours\":\(hours),\"limit\":\(limit)}\n"
+        let data: Data
+        switch request(path: path, line: line) {
+        case .success(let d): data = d
+        case .failure(let e): return .failure(e)
+        }
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let err = obj["error"] as? String {
+            return .failure(.server(err == "unknown command" ? "kanmond が古い版です（一覧は v0.2.1 以降）" : err))
+        }
+        do {
+            return .success(try decodeAlertList(data))
+        } catch {
+            return .failure(.decode(String(describing: error)))
+        }
+    }
+
+    static func decodeAlertList(_ data: Data) throws -> AlertList {
+        try JSONDecoder().decode(AlertList.self, from: data)
+    }
+
     /// 状態の JSON を解釈する（テストからも使う）
     static func decodeSnapshot(_ data: Data) throws -> Snapshot {
         try JSONDecoder().decode(Snapshot.self, from: data)

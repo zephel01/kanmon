@@ -112,6 +112,9 @@ pub struct DnsFacts {
     /// 比較相手の答え（競合した前の応答、DoH の答え）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub other: Vec<String>,
+    /// 答えの IP ごとの TLS 証明書の確認結果（N3）。例 `203.0.113.5: 証明書の検証に失敗（…）`
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tls: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

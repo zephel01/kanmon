@@ -49,9 +49,10 @@ detections:
 
   - id: N3
     name: crosscheck_mismatch
-    points: 40
-    # CDN は場所で答えが変わるので /24 までは同じとみなす。それでも重ならないもの
-    description: 監視リストのドメインの答えが、暗号化 DNS（DoH）で引き直した答えと合わない
+    points: 70
+    # DoH と食い違うだけでは出ない（CDN は問い合わせ元で答えが変わる）。
+    # 答えの IP に接続し、そのドメインの正しい TLS 証明書が出なかったときだけ出る
+    description: 監視リストのドメインの答えのサーバーが、正しい証明書を出さない（偽サーバーへの誘導の疑い）
     kinds: [dns_integrity]
     when: { field: kanmon.dns.finding, op: eq, value: crosscheck_mismatch }
 
@@ -91,14 +92,15 @@ detections:
 
   - id: N6
     name: unexpected_resolver
-    points: 20
+    points: 10
+    # IPv6 の RA で配られる ISP の DNS 等でも起きるので記録のみ。偽応答の割り込みは N5 で見る
     description: 設定にない DNS サーバーから応答が来た
     kinds: [dns_integrity]
     when: { field: kanmon.dns.finding, op: eq, value: unexpected_resolver }
 
   - id: N6u
     name: unexpected_resolver_unknown
-    points: 20
+    points: 10
     description: その DNS サーバーは、よく使われる公開 DNS でもない
     kinds: [dns_integrity]
     when:

@@ -39,7 +39,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 - 💬 **Alerts that explain themselves**: reasons, points, process and destination in full. Warnings and above stay on screen until you dismiss them
 - 📡 **Beacon detection**: statistical periodicity scoring catches C2 check-ins, including ones relayed through legitimate cloud services
 - 🛡️ **Threat intel**: matches against Feodo Tracker, Spamhaus DROP and your own blocklists
-- 🖥️ **Menu bar app (macOS)**: a shield icon whose color shows the state (green = OK, yellow = notice, red = alert, gray = daemon down). Alerts open in a detail window with the full text
+- 🖥️ **Menu bar app (macOS)**: a shield icon whose color shows the state (green = OK, yellow = notice, red = alert, gray = daemon down). Click the counts to open a per-level list you can filter by rule. Alerts open in a detail window with the full text
 - 🔒 **Hardened**: refuses rule files that are not owned by root, passes notification text as arguments so it cannot be injected, and supports an external dead-man heartbeat
 
 ## Quick start
