@@ -34,6 +34,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 - 💬 **Alerts that explain themselves**: reasons, points, process and destination in full. Warnings and above stay on screen until you dismiss them
 - 📡 **Beacon detection**: statistical periodicity scoring catches C2 check-ins, including ones relayed through legitimate cloud services
 - 🛡️ **Threat intel**: matches against Feodo Tracker, Spamhaus DROP and your own blocklists
+- 🖥️ **Menu bar app (macOS)**: a shield icon whose color shows the state (green = OK, yellow = notice, red = alert, gray = daemon down). Alerts open in a detail window with the full text
 - 🔒 **Hardened**: refuses rule files that are not owned by root, passes notification text as arguments so it cannot be injected, and supports an external dead-man heartbeat
 
 ## Quick start
@@ -44,6 +45,11 @@ git clone https://github.com/zephel01/kanmon.git && cd kanmon
 cargo build --release
 sudo packaging/install-macos.sh     # macOS (launchd)
 sudo packaging/install-linux.sh     # Linux (systemd)
+```
+
+Menu bar app (macOS 13+, no sudo, starts at login):
+```bash
+macos/build-app.sh && macos/install-app.sh
 ```
 
 To review alerts:
@@ -85,6 +91,7 @@ detections:
 
 ## Roadmap
 - [x] **v0.1** Monitoring, detection and alerts on both OSes; YAML rules, replay, beacon scoring, threat intel
+- [x] macOS menu bar app (Kanmon.app) and status socket
 - [ ] Linux blocking (eBPF + NFQUEUE, pinned deny maps, fail-open/closed)
 - [ ] macOS blocking (Network Extension, dynamic code-signature checks)
 - [ ] DNS attribution (domain names, DoH bypass detection)

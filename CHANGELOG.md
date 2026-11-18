@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 追加
+- **macOS メニューバーアプリ（Kanmon.app）**：アイコンの色で状態を表示（緑・黄・赤・灰）、直近の警告一覧、警告の詳細ウィンドウ（コピー可）、学習期間の残り日数、既読管理。SwiftUI（macOS 13 以降）。`macos/build-app.sh` / `macos/install-app.sh`
+- **状態ソケット（読み取り専用）**：kanmond が状態と直近 50 件の警告を Unix ソケットで返す。接続相手の uid を検証する（root・ログイン中のユーザー・許可した uid のみ）
+- 設定：`status_socket`、`status_allowed_uids`、`notify.defer_to_app`（アプリが動いている間はローカル通知をアプリに任せる）
+- CI：macOS で Kanmon.app のビルドと署名検証
+
 ## [0.1.0] - 2026-11-18
 第1弾：監視と通知のみ（遮断なし）。
 
