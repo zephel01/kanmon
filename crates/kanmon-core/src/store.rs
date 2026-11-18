@@ -186,6 +186,26 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// 指定レベル以上の直近イベント（新しい順）。JSON をそのまま返す
+    pub fn recent_events(&self, since: i64, levels: &[&str], limit: i64) -> Result<Vec<serde_json::Value>> {
+        let placeholders = levels.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT json FROM events WHERE ts>=? AND level IN ({placeholders}) ORDER BY ts DESC, id DESC LIMIT ?"
+        );
+        let mut st = self.conn.prepare(&sql)?;
+        let mut params: Vec<rusqlite::types::Value> = vec![since.into()];
+        params.extend(levels.iter().map(|l| rusqlite::types::Value::from(l.to_string())));
+        params.push(limit.into());
+        let rows = st.query_map(rusqlite::params_from_iter(params), |r| r.get::<_, String>(0))?;
+        let mut out = vec![];
+        for r in rows {
+            if let Ok(v) = serde_json::from_str(&r?) {
+                out.push(v);
+            }
+        }
+        Ok(out)
+    }
+
     /// スコア上位のイベント（since 以降）
     pub fn top_events(&self, since: i64, limit: i64) -> Result<Vec<TopEvent>> {
         let mut st = self.conn.prepare(
@@ -225,6 +245,13 @@ mod tests {
         let m = s.conn_series(0.0).unwrap();
         assert_eq!(m[&("p".to_string(), "d".to_string())].len(), 8);
         s.meta_set("k", "v").unwrap();
+        for (i, lv) in ["info", "notice", "warn", "critical"].iter().enumerate() {
+            let ev = serde_json::json!({"event": {"id": format!("e{i}")}, "kanmon": {"level": lv}});
+            s.insert_event(&ev, 100 + i as i64).unwrap();
+        }
+        let r = s.recent_events(0, &["notice", "warn", "critical"], 10).unwrap();
+        let ids: Vec<&str> = r.iter().map(|v| v["event"]["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, vec!["e3", "e2", "e1"], "新しい順・info は除く");
         assert_eq!(s.meta_get("k").unwrap().as_deref(), Some("v"));
     }
 }

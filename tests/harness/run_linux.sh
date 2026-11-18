@@ -105,6 +105,16 @@ PY
 kill $D; wait $D 2>/dev/null || true
 sleep 0.5
 
+echo "[I] 再起動後も直近の警告が状態ソケットに残るか"
+"$KANMOND" --config "$W/etc/kanmon.toml" 2>> "$W/kanmond.log" &
+D=$!; sleep 2
+python3 - "$W/kanmond.sock" > "$W/status-restart.json" <<'PY'
+import socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+s.sendall(b'{"cmd":"status"}\n'); print(s.makefile().readline().strip())
+PY
+kill $D; wait $D 2>/dev/null || true
+
 echo
 echo "==== kanmonctl tail（notice 以上）"
 "$KANMONCTL" tail --file "$W/events.jsonl" --min-level notice --lines 200
@@ -148,6 +158,8 @@ g = find(lambda e: e["network"]["kind"] == "listen" and e.get("source",{}).get("
 check("G: 0.0.0.0:8888 の待受に D3", g and "D3" in sig(g[0]))
 hh = find(lambda e: e["network"]["kind"] == "connect" and "npm" in e["process"].get("parent_chain", []))
 check("H: npm 配下の python に D4", hh and "D4" in sig(hh[0]))
+st2 = json.load(open(sys.argv[1].replace("events.jsonl", "status-restart.json")))
+check("I: 再起動後も直近の警告が残る", any(a["level"] == "critical" for a in st2.get("alerts", [])))
 print("RESULT:", "OK" if ok else "NG")
 sys.exit(0 if ok else 1)
 PY

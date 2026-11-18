@@ -113,6 +113,17 @@ impl Monitor {
             events_path: cfg.jsonl.path.display().to_string(),
             ..Default::default()
         });
+        // 再起動しても直近の警告がメニューバーに出るよう、DB から読み戻す（新しい順）
+        let since = Utc::now().timestamp() - 86_400;
+        if let Ok(evs) = store.recent_events(since, &["notice", "warn", "critical"], crate::status::MAX_ALERTS as i64) {
+            for v in evs.iter().rev() {
+                let mut v = v.clone();
+                ev::migrate_legacy(&mut v);
+                if let Some(a) = alert_item_from_event(&v) {
+                    shared.push_alert(a);
+                }
+            }
+        }
         if !cfg.status_socket.is_empty() {
             match crate::status::serve(Path::new(&cfg.status_socket), shared.clone(), cfg.status_allowed_uids.clone()) {
                 Ok(p) => eprintln!("kanmond: 状態ソケット {}", p.display()),
@@ -481,7 +492,7 @@ impl Monitor {
         Ok(true)
     }
 
-    /// 状態ソケットに出す直近の警告（notice 以上）と最終イベント時刻を更新
+    /// 状態ソケットに出す直近の警告（notice 以上）と最終イベント時刻を更新（ライブ）
     fn record_alert(&self, v: &serde_json::Value, level: Level, score: i32, kind: &str, title: &str, body: &str) {
         let ts = v.get("@timestamp").and_then(|x| x.as_str()).unwrap_or("").to_string();
         let tsc = ts.clone();
@@ -562,6 +573,22 @@ impl Monitor {
         }
         Ok(n)
     }
+}
+
+/// 保存済みイベントから状態ソケット用の警告を作る（DB からの読み戻し用）
+fn alert_item_from_event(v: &serde_json::Value) -> Option<AlertItem> {
+    let s = |p: &str| ev::get_path(v, p).and_then(|x| x.as_str()).map(str::to_string);
+    let level = s("kanmon.level")?;
+    let (title, body) = kanmon_core::format::alert_text(v);
+    Some(AlertItem {
+        id: s("event.id")?,
+        ts: s("@timestamp").unwrap_or_default(),
+        score: ev::get_path(v, "kanmon.score").and_then(|x| x.as_i64()).unwrap_or(0) as i32,
+        kind: s("network.kind").unwrap_or_default(),
+        level,
+        title,
+        body,
+    })
 }
 
 /// 親プロセス列の名前。インタプリタ（node・python・bash 等）の場合はスクリプト名も加える。
