@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Kanmon</string>
+  <key>CFBundleDisplayName</key><string>Kanmon</string>
+  <key>CFBundleIdentifier</key><string>io.github.zephel01.kanmon</string>
+  <key>CFBundleExecutable</key><string>KanmonBar</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <!-- メニューバーのみ（Dock に出さない） -->
+  <key>LSUIElement</key><true/>
+  <key>NSHumanReadableCopyright</key><string>Apache License 2.0</string>
+</dict>
+</plist>

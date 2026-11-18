@@ -35,6 +35,10 @@ pub struct Config {
     pub beacon_report_min: f64,
     /// ビーコン集計の間隔（秒）
     pub beacon_interval_s: u64,
+    /// 状態ソケット（読み取り専用、メニューバーアプリ用）。空文字で無効
+    pub status_socket: String,
+    /// 状態ソケットへの接続を追加で許す uid（root とログイン中のユーザーは常に可）
+    pub status_allowed_uids: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +68,8 @@ pub struct NotifyCfg {
     pub alert_level: String,
     /// ダイアログを自動で閉じるまでの秒数
     pub alert_timeout_s: u64,
+    /// メニューバーアプリが接続中は、OS ローカル通知（ダイアログ・バナー）をアプリに任せる
+    pub defer_to_app: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,6 +116,7 @@ impl Default for NotifyCfg {
             heartbeat_minutes: 5,
             alert_level: "warn".into(),
             alert_timeout_s: 600,
+            defer_to_app: true,
         }
     }
 }
@@ -173,6 +180,12 @@ impl Default for Config {
             local_blocklists: vec![etc.join("blocklist.txt")],
             beacon_report_min: 0.6,
             beacon_interval_s: 300,
+            status_socket: if cfg!(target_os = "macos") {
+                "/var/run/kanmond.sock".into()
+            } else {
+                "/run/kanmon/kanmond.sock".into()
+            },
+            status_allowed_uids: vec![],
         }
     }
 }

@@ -8,3 +8,7 @@ target/
 
 # 作業用（報告書・アーカイブ等）。公開しない
 _OUTPUTS/
+
+# macOS アプリのビルド成果物
+macos/build/
+macos/KanmonBar/.build/

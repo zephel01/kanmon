@@ -38,7 +38,7 @@ struct Local {
 }
 
 impl Notifier {
-    pub fn new(cfg: &NotifyCfg) -> Self {
+    pub fn new(cfg: &NotifyCfg, app: Option<std::sync::Arc<crate::status::Shared>>) -> Self {
         let (tx, rx) = channel::<Message>();
         let cfg2 = cfg.clone();
         let alert_level = Level::parse(&cfg.alert_level).unwrap_or(Level::Warn);
@@ -47,7 +47,8 @@ impl Notifier {
             .spawn(move || {
                 let mut st = Local::default();
                 for m in rx {
-                    if cfg2.local {
+                    let deferred = cfg2.defer_to_app && app.as_ref().is_some_and(|a| a.app_active());
+                    if cfg2.local && !deferred {
                         st.show(&m, m.level >= alert_level, cfg2.alert_timeout_s);
                     }
                     if !cfg2.ntfy_url.is_empty() && !cfg2.ntfy_topic.is_empty() {
