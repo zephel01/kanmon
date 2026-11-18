@@ -57,7 +57,61 @@ pub struct Event {
     pub source: Option<Endpoint>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub destination: Option<Destination>,
+    /// DNS の問い合わせ・応答（ECS の `dns.*`）。DNS の改ざん検知イベントで使う
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns: Option<Dns>,
+    /// 対象のファイル（ECS の `file.*`）。hosts の書き換え等
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<File>,
     pub kanmon: KanmonInfo,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Dns {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question: Option<DnsQuestion>,
+    /// 応答の A/AAAA
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_ip: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DnsQuestion {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct File {
+    pub path: String,
+}
+
+/// DNS の改ざん検知で分かった事実（`kanmon.dns.*`）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DnsFacts {
+    /// hosts_changed / resolver_changed / crosscheck_mismatch / private_answer / conflicting_answer / unexpected_resolver
+    pub finding: String,
+    /// 監視リストのドメインが関わる
+    #[serde(default)]
+    pub watched: bool,
+    /// hosts で監視リストのドメインが、ループバック以外の IP へ向けられている
+    #[serde(default)]
+    pub redirected: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<String>,
+    /// 追加された DNS サーバーの最も外側の範囲（internet / lan / loopback）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub added_scope: Option<String>,
+    /// インターネット上の、よく使われる公開 DNS でもないサーバーが追加された
+    #[serde(default)]
+    pub unknown_public: bool,
+    /// 応答を返した DNS サーバー
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// 比較相手の答え（競合した前の応答、DoH の答え）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub other: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -215,6 +269,8 @@ pub struct KanmonInfo {
     /// 学習期間中か
     #[serde(default)]
     pub learning: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dns: Option<DnsFacts>,
 }
 
 #[cfg(test)]

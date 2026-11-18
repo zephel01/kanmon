@@ -20,6 +20,13 @@
 | `status_socket` | macOS `/var/run/kanmond.sock`、Linux `/run/kanmon/kanmond.sock` | 状態ソケット（読み取り専用）。メニューバーアプリが使う。空文字で無効 |
 | `status_allowed_uids` | 空 | 状態ソケットへの接続を追加で許す uid。root とログイン中のユーザーは常に許可 |
 | `[notify] defer_to_app` | true | メニューバーアプリが動いている間は、ダイアログとバナーをアプリに任せる（ntfy は送る） |
+| `[dns] enabled` | true | DNS 応答と TLS の SNI を受け身で読み、宛先にドメイン名を付ける。DNS の設定は変えない。libpcap が必要 |
+| `[dns] interfaces` | 空（自動） | 読むインターフェース。Linux は `any`、macOS は稼働中の全インターフェース（lo0・en*・utun*。60 秒ごとに増えたものを足す） |
+| `[dns] hosts_path` / `resolv_conf` | `/etc/hosts` / `/etc/resolv.conf` 等 | hosts と DNS サーバー設定の監視対象（macOS の DNS サーバーは `scutil --dns` で読む） |
+| `[dns] check_interval_s` | 60 | hosts・DNS サーバー設定を確かめる間隔 |
+| `[dns] crosscheck` / `doh_url` | true / Cloudflare | 監視リストのドメインを DoH で引き直して照合する。外へ問い合わせるのは監視リストのドメインだけで、同じドメインは 30 分に 1 回まで。https のみ |
+| `[dns] watch_domains` | パッケージ配布元・GitHub・AI ベンダー等 | 書き換え・食い違いを重く見るドメイン（サブドメインも含む） |
+| `[dns] private_ok_suffixes` | 空 | プライベート IP に解決されても知らせない接尾辞（社内ドメイン等）。`.local`・`.test`・`ts.net` 等は最初から対象外 |
 
 ## CLI（kanmonctl）
 | コマンド | 用途 |

@@ -5,6 +5,11 @@
 ## [Unreleased]
 
 ### 追加
+- **宛先のドメイン名**：DNS 応答と TLS ClientHello の SNI を受け身で読み（libpcap、プロミスキャスなし、DNS の設定は変えない）、接続イベントに `destination.domain`・`registered_domain`・`domain_source` を付ける。ドメインでの脅威インテル照合、DGA・トンネル系ドメインのルール（S9・S18）が実際の通信で効くようになった
+- **DNS の改ざん検知**（`detections/25-dns.yaml`、N1〜N6）：hosts の書き換え（監視リストのドメインを別サーバーへ向ける行は critical）、DNS サーバー設定の変更（見慣れない公開 DNS は warn）、Cloudflare の DoH での引き直しと照合、公開ドメインのローカル IP への解決、応答の食い違い、設定にない DNS サーバーからの応答
+- **開発者向けルール**：D9（ペーストサイト・Webhook 受け口など持ち出しに使われやすいサービス）、D10（パッケージ導入処理の配下から GitHub の書き込み口へ）、D11（AI コーディング CLI が公式以外の宛先へ。追加ルール例 X1 を同梱化）
+- 設定 `[dns]`（`enabled`・`interfaces`・`hosts_path`・`resolv_conf`・`check_interval_s`・`crosscheck`・`doh_url`・`crosscheck_interval_min`・`watch_domains`・`private_ok_suffixes`）
+- kanmond のビルド機能 `capture`（既定で有効。libpcap が必要。無効にすると名前付けなしでビルドできる）
 - **macOS メニューバーアプリ（Kanmon.app）**：アイコンの色で状態を表示（緑・黄・赤・灰）、直近の警告一覧、警告の詳細ウィンドウ（コピー可）、学習期間の残り日数、既読管理。SwiftUI（macOS 13 以降）。`macos/build-app.sh` / `macos/install-app.sh`
 - **状態ソケット（読み取り専用）**：kanmond が状態と直近 50 件の警告を Unix ソケットで返す。接続相手の uid を検証する（root・ログイン中のユーザー・許可した uid のみ）
 - 設定：`status_socket`、`status_allowed_uids`、`notify.defer_to_app`（アプリが動いている間はローカル通知をアプリに任せる）
@@ -14,6 +19,8 @@
 - 親プロセスの列にスクリプト名を追加（`npm-cli.js`・`pip`・`makepkg` 等）。インタプリタ経由のパッケージマネージャも判定できるようにした
 
 ### 変更
+- D4（パッケージ導入処理の配下からの通信）は、宛先が公式の配布元（npmjs.org・pypi.org・crates.io 等）と分かったときは対象外にした
+- Linux でのビルドに libpcap の開発用ファイル（Ubuntu は `libpcap-dev`）が必要になった
 - Apple 署名・公式パッケージの減点（T-trusted）を ssh・scp・sftp・rsync には適用しない
 - 追加ルールの例を「AI コーディング CLI が公式以外の宛先へ通信（X1）」に差し替え。パッケージ導入時の通信は D4 として正式ルールに入れた
 

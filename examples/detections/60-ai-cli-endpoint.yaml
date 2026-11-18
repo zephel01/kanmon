@@ -1,7 +1,8 @@
 # 追加例：「新しい事象」への対応サンプル。
 # AI コーディング CLI が公式以外の API へ通信する（非公式 API プロキシ＝中転站の利用や、
 # 設定を書き換えられて別の宛先へ送られている疑い）。
-# ※ destination.registered_domain が必要なので、DNS 対応（ロードマップ P3）以降に効く。replay では今すぐ試せる。
+# ※ v0.2.0 からは同じ内容が同梱ルール D11 になった。この例は「ルールの足し方」の見本として残している。
+#   両方を置くと点数が二重に入るので、実際に配置するときは id や条件を変えて使う。
 #
 # 使い方：
 #   1) kanmonctl check --detections ./detections --extra examples/detections/60-ai-cli-endpoint.yaml

@@ -5,7 +5,9 @@
 //!   kanmond --config ./dev.toml --print          # イベントを標準出力にも出す
 //!   kanmond --config ./dev.toml --once --print   # 1 回だけ収集して終了（動作確認用）
 
+mod capture;
 mod config;
+mod dnswatch;
 mod feeds;
 mod identity;
 mod monitor;
@@ -31,6 +33,9 @@ struct Args {
     /// --once のとき、終了前にビーコン集計も実行
     #[arg(long)]
     beacon_now: bool,
+    /// --once のとき、収集前に待つミリ秒（DNS・SNI の観測を取り込むため）
+    #[arg(long, default_value_t = 0)]
+    wait_ms: u64,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -42,6 +47,8 @@ fn main() -> anyhow::Result<()> {
     let mut m = monitor::Monitor::new(cfg)?;
     m.print = a.print;
     if a.once {
+        // DNS・SNI の観測を少し待ってから 1 回だけ収集する（--once のとき）
+        std::thread::sleep(std::time::Duration::from_millis(a.wait_ms));
         let n = m.tick()?;
         eprintln!("kanmond: {n} 件を記録");
         if a.beacon_now {

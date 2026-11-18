@@ -27,6 +27,20 @@ lists:
      "91.105.192.0/23", "91.108.20.0/22", "185.76.151.0/24", "2001:b28:f23d::/48", "2001:b28:f23f::/48",
      "2001:67c:4e8::/48", "2001:b28:f23c::/48", "2a0a:f280::/32"]
   telegram_apps: [telegram, telegram-desktop, "telegram desktop", telegram lite]
+  # パッケージの公式配布元（登録ドメイン）。ここへの通信は D4 の対象外
+  pkg_registries: [npmjs.org, npmjs.com, yarnpkg.com, pypi.org, pythonhosted.org, crates.io, rubygems.org,
+                   golang.org, bun.sh, nodejs.org]
+  # 盗んだ情報の置き場・受け口に使われやすいサービス（登録ドメイン）
+  exfil_services: [pastebin.com, paste.ee, hastebin.com, ghostbin.site, termbin.com, webhook.site,
+                   requestbin.net, pipedream.net, transfer.sh, file.io, 0x0.st, temp.sh, discord.com,
+                   discordapp.com, oastify.com, interact.sh]
+  # GitHub の書き込み口（盗んだトークン・データの送り先に使われた）
+  github_write_hosts: [api.github.com, uploads.github.com, gist.github.com, gist.githubusercontent.com]
+  # AI コーディング CLI と、その公式の宛先（登録ドメイン）
+  ai_clis: [claude, codex, gemini, grok, cursor-agent, aider, opencode, qwen, kimi]
+  ai_official: [anthropic.com, claude.ai, claude.com, openai.com, chatgpt.com, googleapis.com, google.com, x.ai,
+                grok.com, cursor.sh, cursor.com, github.com, githubusercontent.com, sentry.io, statsig.com,
+                datadoghq.com, npmjs.org]
   scripting:
     [node, bun, deno, python, python2, python3, ruby, perl, php, osascript, sh, bash, zsh, dash, pwsh, powershell]
 
@@ -91,6 +105,8 @@ detections:
             - { field: process.name, op: in, value: "@pkg_children", ci: true }
             # python3.12 等の版付きの名前もインタプリタとして識別される
             - { field: process.interpreter, op: eq, value: true }
+        # 宛先の名前が分かり、公式の配布元なら対象外（名前が分からないときは従来どおり加点）
+        - not: { field: destination.registered_domain, op: in, value: "@pkg_registries", ci: true }
 
   - id: D4p
     name: pkg_install_nonstandard_port
@@ -147,3 +163,37 @@ detections:
       all:
         - { field: destination.ip, op: cidr, value: "@telegram_cidrs" }
         - { field: process.name, op: not_in, value: "@telegram_apps", ci: true }
+
+  - id: D9
+    name: exfil_service
+    points: 30
+    description: ブラウザ以外が、盗んだ情報の置き場に使われやすいサービスへ通信（ペーストサイト・Webhook 受け口等）
+    kinds: [connect]
+    when:
+      all:
+        - { field: destination.registered_domain, op: in, value: "@exfil_services", ci: true }
+        - { field: process.name, op: not_in, value: "@browsers", ci: true }
+        # Discord アプリ本体は対象外
+        - not: { field: process.name, op: contains, value: discord, ci: true }
+
+  - id: D10
+    name: pkg_install_github_write
+    points: 20
+    description: パッケージ導入処理の配下から GitHub の書き込み口（API・Gist）へ通信（トークン・データの持ち出しに使われた）
+    kinds: [connect]
+    when:
+      all:
+        - { field: process.parent_chain, op: in, value: "@pkg_managers", ci: true }
+        - { field: destination.domain, op: in, value: "@github_write_hosts", ci: true }
+
+  - id: D11
+    name: ai_cli_unofficial_endpoint
+    points: 30
+    description: AI コーディング CLI が公式以外の宛先へ通信（非公式 API プロキシ・設定の書き換えの疑い）
+    kinds: [connect]
+    when:
+      all:
+        - { field: network.scope, op: eq, value: internet }
+        - { field: process.name, op: in, value: "@ai_clis", ci: true }
+        - { field: destination.registered_domain, op: exists }
+        - { field: destination.registered_domain, op: not_in, value: "@ai_official", ci: true }

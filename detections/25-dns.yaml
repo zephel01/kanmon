@@ -1,0 +1,107 @@
+# DNS の改ざん検知（N1〜N6）。イベントは network.kind = dns_integrity。
+# 宛先の名前付け（DNS 応答・SNI の受け身の観測）が前提。hosts と DNS サーバー設定は読むだけで書き換えない。
+# 誤検知が多ければ点数を下げる。社内ドメインは設定 dns.private_ok_suffixes に足す。
+detections:
+  - id: N1
+    name: hosts_changed
+    points: 30
+    description: hosts ファイルが書き換えられた
+    kinds: [dns_integrity]
+    when: { field: kanmon.dns.finding, op: eq, value: hosts_changed }
+
+  - id: N1w
+    name: hosts_watched_domain
+    points: 40
+    description: hosts の書き換えに、監視リストのドメイン（パッケージ配布元・GitHub・AI ベンダー等）が含まれる
+    kinds: [dns_integrity]
+    when:
+      all:
+        - { field: kanmon.dns.finding, op: eq, value: hosts_changed }
+        - { field: kanmon.dns.watched, op: eq, value: true }
+
+  - id: N1r
+    name: hosts_redirect
+    points: 60
+    description: hosts で監視リストのドメインが別のサーバーへ向けられている（偽サーバーへの誘導の疑い）
+    kinds: [dns_integrity]
+    when:
+      all:
+        - { field: kanmon.dns.finding, op: eq, value: hosts_changed }
+        - { field: kanmon.dns.redirected, op: eq, value: true }
+
+  - id: N2
+    name: resolver_changed
+    points: 10
+    # Wi-Fi の切り替えでも変わるので、それだけでは記録のみ
+    description: DNS サーバーの設定が変わった
+    kinds: [dns_integrity]
+    when: { field: kanmon.dns.finding, op: eq, value: resolver_changed }
+
+  - id: N2p
+    name: resolver_unknown_public
+    points: 50
+    description: インターネット上の見慣れない DNS サーバーが設定された（DNSChanger 型の疑い）
+    kinds: [dns_integrity]
+    when:
+      all:
+        - { field: kanmon.dns.finding, op: eq, value: resolver_changed }
+        - { field: kanmon.dns.unknown_public, op: eq, value: true }
+
+  - id: N3
+    name: crosscheck_mismatch
+    points: 40
+    # CDN は場所で答えが変わるので /24 までは同じとみなす。それでも重ならないもの
+    description: 監視リストのドメインの答えが、暗号化 DNS（DoH）で引き直した答えと合わない
+    kinds: [dns_integrity]
+    when: { field: kanmon.dns.finding, op: eq, value: crosscheck_mismatch }
+
+  - id: N4
+    name: private_answer
+    points: 30
+    description: 公開ドメインがループバック・社内の IP に解決された（DNS リバインディング・改ざんの疑い）
+    kinds: [dns_integrity]
+    when: { field: kanmon.dns.finding, op: eq, value: private_answer }
+
+  - id: N4w
+    name: private_answer_watched
+    points: 30
+    description: ローカルの IP に解決されたのが監視リストのドメイン
+    kinds: [dns_integrity]
+    when:
+      all:
+        - { field: kanmon.dns.finding, op: eq, value: private_answer }
+        - { field: kanmon.dns.watched, op: eq, value: true }
+
+  - id: N5
+    name: conflicting_answer
+    points: 40
+    description: 同じ問い合わせに中身の違う応答が届いた（偽応答の割り込みの疑い）
+    kinds: [dns_integrity]
+    when: { field: kanmon.dns.finding, op: eq, value: conflicting_answer }
+
+  - id: N5w
+    name: conflicting_answer_watched
+    points: 30
+    description: 応答が食い違ったのが監視リストのドメイン
+    kinds: [dns_integrity]
+    when:
+      all:
+        - { field: kanmon.dns.finding, op: eq, value: conflicting_answer }
+        - { field: kanmon.dns.watched, op: eq, value: true }
+
+  - id: N6
+    name: unexpected_resolver
+    points: 20
+    description: 設定にない DNS サーバーから応答が来た
+    kinds: [dns_integrity]
+    when: { field: kanmon.dns.finding, op: eq, value: unexpected_resolver }
+
+  - id: N6u
+    name: unexpected_resolver_unknown
+    points: 20
+    description: その DNS サーバーは、よく使われる公開 DNS でもない
+    kinds: [dns_integrity]
+    when:
+      all:
+        - { field: kanmon.dns.finding, op: eq, value: unexpected_resolver }
+        - { field: kanmon.dns.unknown_public, op: eq, value: true }

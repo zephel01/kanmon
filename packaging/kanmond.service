@@ -9,7 +9,8 @@ Type=simple
 ExecStart=/usr/local/sbin/kanmond --config /etc/kanmon/kanmon.toml
 Restart=always
 RestartSec=2
-# /proc/<pid>/fd を読むため root で動かす（第1弾は遮断しないので CAP_NET_ADMIN は不要）
+# /proc/<pid>/fd を読むため、また DNS・SNI の受け身の観測（AF_PACKET、CAP_NET_RAW）のため root で動かす
+# （遮断はしないので CAP_NET_ADMIN は使わない）
 User=root
 Nice=5
 ProtectSystem=strict

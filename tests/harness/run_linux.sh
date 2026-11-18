@@ -17,6 +17,9 @@ echo "work: $W"
 mkdir -p "$W/etc/detections" "$W/data"
 install -m 0644 "$ROOT"/detections/*.yaml "$W/etc/detections/"
 echo "198.51.100.0/24" > "$W/etc/blocklist.txt"
+# DNS の改ざん検知用：本物の /etc/hosts・resolv.conf は使わず、作業ディレクトリのものを見せる
+printf '127.0.0.1 localhost\n::1 localhost\n' > "$W/hosts"
+echo "nameserver 192.168.77.1" > "$W/resolv.conf"
 chmod 0644 "$W/etc/blocklist.txt"
 cat > "$W/etc/kanmon.toml" <<EOF
 mode = "observe"
@@ -28,6 +31,8 @@ strict_owner = true
 local_blocklists = ["$W/etc/blocklist.txt"]
 beacon_interval_s = 10
 feeds = []
+# SNI の確認でループバックの TLS 接続を使うため
+include_loopback = true
 status_socket = "$W/kanmond.sock"
 [jsonl]
 path = "$W/events.jsonl"
@@ -36,6 +41,12 @@ local = false
 min_level = "notice"
 ntfy_url = "http://127.0.0.1:18090"
 ntfy_topic = "kanmon-harness"
+[dns]
+hosts_path = "$W/hosts"
+resolv_conf = ["$W/resolv.conf"]
+check_interval_s = 3
+# 外部の DoH には問い合わせない（照合 N3 は単体テストで確認）
+crosscheck = false
 EOF
 
 # ---- 偽 ntfy（受け取った JSON を保存するだけ）
@@ -90,6 +101,59 @@ cat > "$W/npm" <<'SH'
 python3 -c "import socket,time; s=socket.create_connection(('203.0.113.50',443),3); time.sleep(1.5)" || true
 SH
 chmod +x "$W/npm"; "$W/npm"
+
+echo "[J] DNS 応答で宛先に名前が付く／公開ドメインがループバックに解決（N4）"
+# 127.0.0.1:53 で 1 回ずつ答えるだけの DNS（名前は example.com / example.org、IP は RFC 5737 とループバック）
+python3 - <<'PY'
+import socket, struct, threading
+ANS = {"named-test.example.com": "203.0.113.60", "rebind-test.example.com": "127.0.0.2"}
+srv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); srv.bind(("127.0.0.1", 53))
+def q(name):
+    h = struct.pack(">HHHHHH", 0x4242, 0x0100, 1, 0, 0, 0)
+    return h + b"".join(bytes([len(l)]) + l.encode() for l in name.split(".")) + b"\0" + struct.pack(">HH", 1, 1)
+def serve():
+    for _ in range(len(ANS)):
+        data, addr = srv.recvfrom(512)
+        name, i = [], 12
+        while data[i]:
+            name.append(data[i+1:i+1+data[i]].decode()); i += 1 + data[i]
+        ip = socket.inet_aton(ANS[".".join(name)])
+        resp = data[:2] + struct.pack(">HHHHH", 0x8180, 1, 1, 0, 0) + data[12:i+5] + b"\xc0\x0c" + struct.pack(">HHIH", 1, 1, 60, 4) + ip
+        srv.sendto(resp, addr)
+t = threading.Thread(target=serve); t.start()
+for n in ANS:
+    c = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); c.settimeout(2)
+    c.sendto(q(n), ("127.0.0.1", 53)); c.recvfrom(512)
+t.join()
+PY
+sleep 0.5
+# 名前の付いた宛先へ接続（収集間隔より長く 1.5 秒保持）
+"$W/netclient" 203.0.113.60 443 1 0 1500
+
+echo "[K] TLS の SNI で宛先に名前が付く"
+python3 - <<'PY'
+import socket, ssl, threading, time
+srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+srv.bind(("127.0.0.3", 443)); srv.listen(4)
+held = []
+def acc():
+    for _ in range(2):
+        c, _ = srv.accept(); held.append(c)
+threading.Thread(target=acc, daemon=True).start()
+ctx = ssl.create_default_context()
+for _ in range(2):
+    s = socket.create_connection(("127.0.0.3", 443), 2)
+    s.settimeout(1.2)
+    try:
+        ctx.wrap_socket(s, server_hostname="sni-test.example.org")  # 相手は TLS を話さないので途中で止まる
+    except Exception:
+        pass
+time.sleep(0.5)
+PY
+
+echo "[L] hosts の書き換え（N1・N1w・N1r）と、見慣れない DNS サーバーへの変更（N2・N2p）"
+echo "203.0.113.66 registry.npmjs.org" >> "$W/hosts"
+echo "nameserver 198.51.100.53" > "$W/resolv.conf"
 
 echo "[E] 疑似ビーコン：1 秒周期 × 10 回（S7）"
 "$W/netclient" 203.0.113.20 443 10 1000 500
@@ -160,6 +224,18 @@ hh = find(lambda e: e["network"]["kind"] == "connect" and "npm" in e["process"].
 check("H: npm 配下の python に D4", hh and "D4" in sig(hh[0]))
 st2 = json.load(open(sys.argv[1].replace("events.jsonl", "status-restart.json")))
 check("I: 再起動後も直近の警告が残る", any(a["level"] == "critical" for a in st2.get("alerts", [])))
+j = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "203.0.113.60")
+check("J: 203.0.113.60 に named-test.example.com（dns）", j and j[0]["destination"].get("domain") == "named-test.example.com"
+      and j[0]["destination"].get("domain_source") == "dns" and j[0]["destination"].get("registered_domain") == "example.com")
+n4 = find(lambda e: e["network"]["kind"] == "dns_integrity" and e["kanmon"]["dns"]["finding"] == "private_answer")
+check("J: rebind-test.example.com → 127.0.0.2 に N4", n4 and "N4" in sig(n4[0]) and n4[0]["dns"]["question"]["name"] == "rebind-test.example.com")
+k = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "127.0.0.3")
+check("K: 127.0.0.3:443 に sni-test.example.org（sni）", k and any(x["destination"].get("domain") == "sni-test.example.org"
+      and x["destination"].get("domain_source") in ("sni", "sni_ip") for x in k))
+n1 = find(lambda e: e["network"]["kind"] == "dns_integrity" and e["kanmon"]["dns"]["finding"] == "hosts_changed")
+check("L: hosts の書き換えに N1+N1w+N1r、critical", n1 and {"N1","N1w","N1r"} <= sig(n1[0]) and n1[0]["kanmon"]["level"] == "critical")
+n2 = find(lambda e: e["network"]["kind"] == "dns_integrity" and e["kanmon"]["dns"]["finding"] == "resolver_changed")
+check("L: DNS サーバーの変更に N2+N2p、warn", n2 and {"N2","N2p"} <= sig(n2[0]) and n2[0]["kanmon"]["level"] == "warn")
 print("RESULT:", "OK" if ok else "NG")
 sys.exit(0 if ok else 1)
 PY
