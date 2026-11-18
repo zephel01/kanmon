@@ -274,6 +274,32 @@ pub struct KanmonInfo {
     pub learning: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dns: Option<DnsFacts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes: Option<BytesFacts>,
+}
+
+/// 送信量の報告（`network.kind = bytes_report`）の事実（`kanmon.bytes.*`）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BytesFacts {
+    /// 窓の中で、この宛先へ送ったバイト数
+    pub out: u64,
+    /// 集計の窓（秒）
+    pub window_s: u64,
+    /// 開いている通常ファイルの合計容量
+    #[serde(default)]
+    pub open_size: u64,
+    /// 送信量 ÷ 開いているファイルの合計（開いているファイルが無ければ無し）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub out_per_open: Option<f64>,
+    /// 開いているファイルのパス（容量の大きい順、最大 128 件）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_paths: Vec<String>,
+    /// 開いているファイルの拡張子（小文字）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_exts: Vec<String>,
+    /// 表示用：大きい順に 5 件「パス (容量)」
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_top: Vec<String>,
 }
 
 #[cfg(test)]

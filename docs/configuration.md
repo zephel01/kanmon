@@ -26,6 +26,9 @@
 | `[dns] check_interval_s` | 60 | hosts・DNS サーバー設定を確かめる間隔 |
 | `[dns] crosscheck` / `doh_url` | true / Cloudflare | 監視リストのドメインを DoH で引き直して照合する。外へ問い合わせるのは監視リストのドメインだけで、同じドメインは 30 分に 1 回まで。https のみ |
 | `[dns] watch_domains` | パッケージ配布元・GitHub・AI ベンダー等 | 書き換え・食い違いを重く見るドメイン（サブドメインも含む） |
+| `[volume] interval_s` / `window_s` / `min_report_kb` | 10 / 600 / 1024 | 送信量を読む間隔、合計する窓（秒）、報告する最小量（KB）。macOS は nettop、Linux は sock_diag で読む |
+| `[jsonl] rotate` / `keep_days` | `size` / 30 | `daily` にすると `events.YYYY-MM-DD.jsonl` に日付ごとに切り替え、`keep_days` 日残す（同じ日に `max_mb` を超えたら番号付き） |
+| `[log] path` / `keep_days` | macOS `/Library/Logs/kanmon/kanmond.log`、Linux 空（journald） / 14 | kanmond の動作ログ。日付が変わると `kanmond.YYYY-MM-DD.log` に切り替え、`keep_days` 日残す |
 | `[dns] private_ok_suffixes` | 空 | プライベート IP に解決されても知らせない接尾辞（社内ドメイン等）。`.local`・`.test`・`ts.net` 等は最初から対象外 |
 
 ## 更新・起動・停止
@@ -45,7 +48,7 @@ Linux は `sudo packaging/install-linux.sh`。どちらも、動いている古�
 | 再起動 | `sudo launchctl kickstart -k system/com.kanmon.kanmond` | `sudo systemctl restart kanmond` |
 | 停止 | `sudo launchctl bootout system/com.kanmon.kanmond` | `sudo systemctl stop kanmond` |
 | 起動 | `sudo launchctl bootstrap system /Library/LaunchDaemons/com.kanmon.kanmond.plist` | `sudo systemctl start kanmond` |
-| ログ | `/Library/Logs/kanmon/kanmond.log` | `journalctl -u kanmond` |
+| ログ | `/Library/Logs/kanmon/kanmond.log`（前の日は `kanmond.YYYY-MM-DD.log`。起動直後の失敗は `kanmond.stderr.log`） | `journalctl -u kanmond` |
 
 ### Kanmon.app（メニューバー、macOS）
 | 操作 | コマンド |

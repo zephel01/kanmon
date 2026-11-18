@@ -33,6 +33,15 @@ critical = 100
 # path = "/var/log/kanmon/events.jsonl"
 max_mb = 50
 keep = 5
+# "size"（サイズごと：events.jsonl.1 … .keep）/ "daily"（日付ごと：events.YYYY-MM-DD.jsonl、keep_days 日残す）
+rotate = "size"
+keep_days = 30
+
+# kanmond の動作ログ。macOS の既定は /Library/Logs/kanmon/kanmond.log（日付ごとに kanmond.YYYY-MM-DD.log）。
+# Linux の既定は空（標準エラー → journald）
+[log]
+# path = "/var/log/kanmon/kanmond.log"
+keep_days = 14
 
 [notify]
 local = true
@@ -73,3 +82,11 @@ crosscheck_interval_min = 30
 # watch_domains = ["registry.npmjs.org", "pypi.org", "github.com", ...]   # 既定値は docs/detections.md
 # 社内ドメインなど、プライベート IP に解決されても知らせない接尾辞
 # private_ok_suffixes = ["corp.example.co.jp"]
+
+# 送信量（プロセス × 宛先）。直近 window_s 秒の合計が min_report_kb 以上なら報告し、検知ルール（55-volume.yaml）で判定する
+[volume]
+enabled = true
+interval_s = 10
+window_s = 600
+min_report_kb = 1024
+report_every_min = 30

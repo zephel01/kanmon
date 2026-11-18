@@ -37,6 +37,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 - 🔍 **Per-process attribution**: each connection is recorded with its executable, signature (Apple / Developer ID / ad-hoc / unsigned), owning package, SHA-256 and parent chain
 - 🧩 **Rules as YAML**: write a rule, back-test it on past logs with `kanmonctl replay`, then drop it in place. The daemon hot-reloads it within 5 seconds
 - 💬 **Alerts that explain themselves**: reasons, points, process and destination in full. Warnings and above stay on screen until you dismiss them
+- 📦 **Upload volume**: judges how much was sent together with the files the process has open (`.env`, `.git` objects, GGUF, …) and the destination, so a model upload is told apart from exfiltration
 - 📡 **Beacon detection**: statistical periodicity scoring catches C2 check-ins, including ones relayed through legitimate cloud services
 - 🛡️ **Threat intel**: matches against Feodo Tracker, Spamhaus DROP and your own blocklists
 - 🖥️ **Menu bar app (macOS)**: a shield icon whose color shows the state (green = OK, yellow = notice, red = alert, gray = daemon down). Click the counts to open a per-level list you can filter by rule. Alerts open in a detail window with the full text
@@ -92,7 +93,7 @@ detections:
         - { field: process.parent_chain, op: in, value: [npm, pip, pip3, uv, cargo] }
         - { field: process.name, op: in, value: [sh, bash, curl, wget] }
 ```
-45 rules ship by default: general techniques (S1–S18), developer-targeted ones (D1–D11: remote-access tools, tunnels, exposed dev servers, network activity during package installs, exfiltration-friendly services, AI CLIs talking to unofficial endpoints, and more) and DNS tampering (N1–N6: hosts file edits, resolver changes, DoH cross-check, and more). The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
+52 rules ship by default: general techniques (S1–S18), developer-targeted ones (D1–D11: remote-access tools, tunnels, exposed dev servers, network activity during package installs, exfiltration-friendly services, AI CLIs talking to unofficial endpoints, and more) and DNS tampering (N1–N6: hosts file edits, resolver changes, DoH cross-check, and more) and upload volume (V1–V9). The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
 
 ## Roadmap
 - [x] **v0.1** Monitoring, detection and alerts on both OSes; YAML rules, replay, beacon scoring, threat intel

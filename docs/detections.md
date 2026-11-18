@@ -54,7 +54,7 @@ detections:
 ## 参照できるフィールド
 | フィールド | 内容 |
 |---|---|
-| `network.kind` / `direction` / `transport` / `scope` | 種別（connect / accept / listen / raw_socket / beacon_report / dns_integrity）、方向、tcp / udp / raw / packet / dns、loopback / lan / internet / all |
+| `network.kind` / `direction` / `transport` / `scope` | 種別（connect / accept / listen / raw_socket / beacon_report / dns_integrity / bytes_report）、方向、tcp / udp / raw / packet / dns、loopback / lan / internet / all |
 | `process.executable` / `name` / `args` / `user` / `uid` | 実行ファイル、引数、ユーザー |
 | `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / adhoc / unsigned / package / unmanaged / unknown |
 | `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
@@ -73,6 +73,8 @@ detections:
 | `kanmon.dest_first_for_process` / `port_first_for_process` / `listen_new` | ベースラインとの差分（学習期間中は常に false） |
 | `kanmon.dga_score` | 自動生成ドメインらしさ（0〜1、ドメインがあるときだけ） |
 | `kanmon.beacon.score` / `n` / `median_interval_s` / `mad_s` | ビーコン（`beacon_report` のみ） |
+| `kanmon.bytes.out` / `window_s` | 1 つの宛先へ窓（既定 10 分）の間に送ったバイト数（`bytes_report` のみ） |
+| `kanmon.bytes.open_paths` / `open_exts` / `open_size` / `out_per_open` | 報告の瞬間に開いていた通常ファイルのパス・拡張子・合計容量、送信量 ÷ 合計容量 |
 
 ## 同梱ルール
 | ID | 内容 | 点 |
@@ -83,7 +85,7 @@ detections:
 | S4 | 一時フォルダ・ダウンロード等から実行 | +25 |
 | S5 | 削除済み・memfd・隠しファイル | +35 |
 | S6 | 文書・メール・ブラウザの配下でシェル等が通信 | +40 |
-| S7 / S7m / S7x | ビーコン（強・中）、信頼できない実行ファイルの周期通信 | +30 / +15 / +20 |
+| S7 / S7m / S7x | ビーコン（強・中）、信頼できない実行ファイルの周期通信。インターネットの宛先で間隔 1 秒以上のもの | +20 / +10 / +20 |
 | S9 | 自動生成（DGA）らしいドメイン | +15 |
 | S11 / S12 | 非標準ポートを初めて使う / 初めての宛先 | +10 / +10 |
 | S14 | ブラウザ以外が DNS を迂回（DoH / DoT） | +15 |
@@ -117,6 +119,21 @@ detections:
 | N4 / N4w | 公開ドメインがループバック・社内の IP に解決された / それが監視リストのドメイン | +30 / +30 |
 | N5 / N5w | 同じ問い合わせに中身の違う応答が届いた / それが監視リストのドメイン | +40 / +30 |
 | N6 / N6u | 設定にない DNS サーバーから応答 / それがよく使われる公開 DNS でもない（記録のみ） | +10 / +10 |
+
+### 送信量（`55-volume.yaml`）
+イベントの `network.kind` は `bytes_report`。kanmond が「プロセス × 宛先」ごとに直近 10 分の送信量を集計し、1MB 以上のものを報告する（TCP のみ）。
+
+| ID | 内容 | 点 |
+|---|---|---|
+| V1 | 10 分で 100MB 以上を 1 つの宛先へ | +20 |
+| V2 | AI コーディング CLI が 50MB 以上 | +40 |
+| V3 | パッケージ導入処理の配下から 1MB 以上 | +50 |
+| V4 | 秘密情報・リポジトリの中身（`.env`・`~/.ssh`・`.git/objects` 等）を開いたまま 1MB 以上 | +50 |
+| V5 | 開いているファイルの合計の 3 倍以上を送った（100MB 以上） | +15 |
+| V6 | 名前の分からない宛先へ、署名の無いプロセスが 100MB 以上 | +15 |
+| V9 | モデル・データ（GGUF・safetensors 等）を登録済みの置き場（Hugging Face 等）へ上げている | −40 |
+
+正当な置き場は `upload_ok` に足す。開いているファイルは報告の瞬間のもので、送信前に閉じたファイルは見えない。
 
 監視リスト（`dns.watch_domains`）の既定値は、パッケージ配布元（npm・PyPI・crates.io 等）、GitHub、Hugging Face、AI ベンダーの API、主要なログイン画面です。
 

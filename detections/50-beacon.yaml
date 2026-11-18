@@ -1,21 +1,30 @@
 # ビーコン周期性（設計書 S7、§9.2）。5 分ごとのバッチで beacon_report イベントとして評価される。
+# 署名のあるアプリの定期的な問い合わせ（更新確認・同期・API のポーリング）はよくあるので、
+# S7 / S7m だけでは記録のみ（info）。信頼できない実行ファイル（S7x）と組み合わさって通知になる。
+# LAN の宛先（AirDrop・Handoff 等）と、間隔が 1 秒未満のもの（連続した通信）は対象外。
 detections:
   - id: S7
     name: beacon_strong
-    points: 30
+    points: 20
     description: 強い周期性の通信（ビーコン）
     kinds: [beacon_report]
-    when: { field: kanmon.beacon.score, op: gte, value: 0.8 }
+    when:
+      all:
+        - { field: kanmon.beacon.score, op: gte, value: 0.8 }
+        - { field: network.scope, op: eq, value: internet }
+        - { field: kanmon.beacon.median_interval_s, op: gte, value: 1 }
 
   - id: S7m
     name: beacon_medium
-    points: 15
+    points: 10
     description: 周期性のある通信（ビーコンの疑い）
     kinds: [beacon_report]
     when:
       all:
         - { field: kanmon.beacon.score, op: gte, value: 0.6 }
         - { field: kanmon.beacon.score, op: lt, value: 0.8 }
+        - { field: network.scope, op: eq, value: internet }
+        - { field: kanmon.beacon.median_interval_s, op: gte, value: 1 }
 
   # 署名されていない・一時領域のプロセスの定期通信はさらに重く
   - id: S7x
@@ -26,6 +35,8 @@ detections:
     when:
       all:
         - { field: kanmon.beacon.score, op: gte, value: 0.6 }
+        - { field: network.scope, op: eq, value: internet }
+        - { field: kanmon.beacon.median_interval_s, op: gte, value: 1 }
         - any:
             - { field: process.code_signature.status, op: in, value: [unsigned, adhoc, unmanaged, invalid] }
             - { field: process.executable, op: prefix, value: "@temp_dirs" }
