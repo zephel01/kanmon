@@ -163,7 +163,7 @@ impl ProcCache {
     }
 
     /// 親を最大 depth 段たどり、実行ファイル名（basename）を返す
-    pub fn parent_chain(&mut self, ppid: u32, depth: usize) -> Vec<(u32, Option<String>)> {
+    pub fn parent_chain(&mut self, ppid: u32, depth: usize) -> Vec<(u32, Option<String>, Vec<String>)> {
         let mut out = vec![];
         let mut cur = ppid;
         for _ in 0..depth {
@@ -171,7 +171,7 @@ impl ProcCache {
                 break;
             }
             let Some(p) = self.get(cur) else { break };
-            out.push((cur, p.exe.clone()));
+            out.push((cur, p.exe.clone(), p.args.clone()));
             if p.ppid == cur || cur == 1 {
                 break;
             }

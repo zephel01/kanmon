@@ -16,7 +16,7 @@
 
 ---
 
-*Kanmon* (関門) is Japanese for a checkpoint gate, the place where travelers were inspected before passing through.
+*Kanmon* (関門) is Japanese for a checkpoint gate, the place where travelers were inspected before passing through. kanmon is not a replacement for EDR or antivirus; it watches the **network chokepoint** those tools tend to cover thinly.
 
 kanmon inspects every connection entering or leaving your machine and records two things:
 - **which executable** made it: code signature, owning package, SHA-256, parent chain
@@ -81,7 +81,7 @@ detections:
         - { field: process.parent_chain, op: in, value: [npm, pip, pip3, uv, cargo] }
         - { field: process.name, op: in, value: [sh, bash, curl, wget] }
 ```
-19 rules ship by default. The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
+30 rules ship by default: general techniques (S1–S18) and developer-targeted ones (D1–D8: remote-access tools, tunnels, exposed dev servers, network activity during package installs, and more). The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
 
 ## Roadmap
 - [x] **v0.1** Monitoring, detection and alerts on both OSes; YAML rules, replay, beacon scoring, threat intel

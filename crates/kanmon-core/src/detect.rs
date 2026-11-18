@@ -17,7 +17,7 @@
 //!         - not: { field: network.scope, op: eq, value: loopback }
 //! ```
 //!
-//! 演算子：eq ne in not_in prefix suffix contains regex gt gte lt lte exists missing
+//! 演算子：eq ne in not_in prefix suffix contains regex cidr gt gte lt lte exists missing
 //! `value` が `"@名前"` なら lists の値に展開。`ci: true` で大文字小文字を無視。
 //! フィールドが配列の場合、文字列系演算子は「どれか 1 つが一致」。
 //! `"~/"` で始まる prefix は `/Users/*/`・`/home/*/`・`/root/` に展開。
@@ -114,6 +114,8 @@ enum Matcher {
     NotIn(Vec<Value>, bool),
     /// prefix/suffix/contains/regex はすべて正規表現に変換して保持
     Re(Vec<Regex>),
+    /// IP アドレスが CIDR のどれかに含まれる
+    Cidr(Vec<ipnet::IpNet>),
     Num(NumOp, f64),
 }
 
@@ -341,6 +343,16 @@ fn compile(c: &CondDef, lists: &HashMap<String, Vec<String>>) -> Result<Cond> {
                         .map(|s| Regex::new(&format!("{ci}{}", regex::escape(s))))
                         .collect::<std::result::Result<_, _>>()?,
                 ),
+                "cidr" => Matcher::Cidr(
+                    strs()?
+                        .iter()
+                        .map(|s| {
+                            s.parse::<ipnet::IpNet>()
+                                .or_else(|_| s.parse::<std::net::IpAddr>().map(ipnet::IpNet::from))
+                                .map_err(|_| anyhow!("cidr '{s}' を解釈できません"))
+                        })
+                        .collect::<Result<_>>()?,
+                ),
                 "regex" => Matcher::Re(
                     strs()?.iter().map(|s| Regex::new(&format!("{ci}{s}"))).collect::<std::result::Result<_, _>>()?,
                 ),
@@ -408,6 +420,17 @@ fn eval(c: &Cond, ev: &Value) -> bool {
                 }
                 Matcher::Re(res) => got
                     .is_some_and(|g| scalar_any(g, |x| as_text(x).is_some_and(|s| res.iter().any(|r| r.is_match(&s))))),
+                Matcher::Cidr(nets) => got.is_some_and(|g| {
+                    scalar_any(g, |x| {
+                        x.as_str().and_then(|s| s.parse::<std::net::IpAddr>().ok()).is_some_and(|ip| {
+                            let ip = match ip {
+                                std::net::IpAddr::V6(v) => v.to_ipv4_mapped().map(std::net::IpAddr::V4).unwrap_or(ip),
+                                v4 => v4,
+                            };
+                            nets.iter().any(|n| n.contains(&ip))
+                        })
+                    })
+                }),
                 Matcher::Num(op, n) => got.and_then(|g| g.as_f64()).is_some_and(|g| match op {
                     NumOp::Gt => g > *n,
                     NumOp::Gte => g >= *n,
@@ -531,6 +554,29 @@ detections:
             "kanmon": {"dga_score": 0.1}
         });
         assert!(s.evaluate(&ev2).is_empty(), "{:?}", s.evaluate(&ev2));
+    }
+
+    #[test]
+    fn cidr_op() {
+        let s = DetectionSet::from_yaml(
+            "detections: [{id: C, name: c, points: 1, when: {field: destination.ip, op: cidr, value: ['149.154.160.0/20', '2001:67c:4e8::/48', '10.0.0.1']}}]",
+        )
+        .unwrap();
+        for (ip, hit) in [
+            ("149.154.167.50", true),
+            ("::ffff:149.154.167.50", true),
+            ("2001:67c:4e8:f004::9", true),
+            ("10.0.0.1", true),
+            ("8.8.8.8", false),
+            ("not-an-ip", false),
+        ] {
+            let ev = serde_json::json!({"destination": {"ip": ip}});
+            assert_eq!(!s.evaluate(&ev).is_empty(), hit, "{ip}");
+        }
+        assert!(DetectionSet::from_yaml(
+            "detections: [{id: C, name: c, points: 1, when: {field: x, op: cidr, value: 'bad/99'}}]"
+        )
+        .is_err());
     }
 
     #[test]

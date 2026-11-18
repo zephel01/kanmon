@@ -364,12 +364,12 @@ impl Monitor {
                         signing_id: id.signing_id.clone(),
                         package: id.package.clone(),
                     }),
-                    parent: chain.first().map(|(ppid, exe)| ev::Parent {
+                    parent: chain.first().map(|(ppid, exe, _)| ev::Parent {
                         pid: *ppid,
                         name: exe.as_deref().map(basename),
                         executable: exe.clone(),
                     }),
-                    parent_chain: chain.iter().filter_map(|(_, x)| x.as_deref().map(basename)).collect(),
+                    parent_chain: chain_names(&chain, &self.cfg.interpreters),
                     exe_deleted: p.exe_deleted,
                     memfd: p.memfd,
                     interpreter: script.is_some(),
@@ -498,9 +498,53 @@ impl Monitor {
     }
 }
 
+/// 親プロセス列の名前。インタプリタ（node・python・bash 等）の場合はスクリプト名も加える。
+/// 例：`node /usr/lib/node_modules/npm/bin/npm-cli.js install` → ["node", "npm-cli.js"]
+pub fn chain_names(chain: &[(u32, Option<String>, Vec<String>)], interpreters: &[String]) -> Vec<String> {
+    let mut out = vec![];
+    for (_, exe, args) in chain {
+        let Some(name) = exe.as_deref().map(basename) else { continue };
+        let script = identity::interpreter_script(&name, args, interpreters).flatten();
+        out.push(name);
+        match script {
+            // python -m pip install … → "pip"
+            Some(s) if s.starts_with("module:") => out.push(s["module:".len()..].to_string()),
+            Some(s) if !s.starts_with('<') => out.push(basename(&s)),
+            _ => {}
+        }
+    }
+    out
+}
+
 fn load_rules(cfg: &Config, strict: bool) -> Result<RuleSet> {
     if strict && cfg.rules_file.exists() {
         kanmon_core::detect::check_owner(&cfg.rules_file)?;
     }
     RuleSet::load(&cfg.rules_file)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chain_names_include_scripts() {
+        let interp: Vec<String> = ["node", "python", "bash"].iter().map(|s| s.to_string()).collect();
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let chain = vec![
+            (
+                10,
+                Some("/usr/bin/node".to_string()),
+                a(&["node", "/usr/lib/node_modules/npm/bin/npm-cli.js", "install"]),
+            ),
+            (9, Some("/usr/bin/python3.12".to_string()), a(&["python3", "-m", "pip", "install", "x"])),
+            (8, Some("/usr/bin/bash".to_string()), a(&["bash", "/usr/bin/makepkg", "-si"])),
+            (7, Some("/usr/bin/zsh".to_string()), a(&["-zsh"])),
+            (1, None, vec![]),
+        ];
+        assert_eq!(
+            chain_names(&chain, &interp),
+            vec!["node", "npm-cli.js", "python3.12", "pip", "bash", "makepkg", "zsh"]
+        );
+    }
 }
