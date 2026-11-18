@@ -99,7 +99,7 @@ fn dir_mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
 /// （ドメイン, 受け身で見た答え, DoH と証明書の確認結果）
 type DohResult = (String, Vec<std::net::IpAddr>, std::result::Result<crate::dnswatch::Crosscheck, String>);
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     let mut buf = [0u8; 256];
     let r = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
     if r != 0 {

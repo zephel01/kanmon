@@ -14,6 +14,7 @@
 | `interval_ms` | 500 | 収集の間隔。短くすると短命な接続を拾いやすくなるが、CPU を使う |
 | `[notify] alert_level` | `warn` | このレベル以上を「閉じるまで残る警告」にする |
 | `[notify] ntfy_url` / `ntfy_topic` | 空 | ntfy で外部にも通知する（情報のみ。遠隔から許可する機能はない） |
+| `[[notify.webhooks]]` `url` / `format` / `min_level` / `include_host` / `token` | なし / `json` / `notify.min_level` / false / 空 | Webhook で外部に通知する（複数書ける）。`format` は `json`（汎用。`{"source":"kanmon","level","title","body","time"}`）・`slack`・`discord`。URL は https のみ（ループバックだけは http 可）。ホスト名は `include_host = true` のときだけ入れる。Slack は `<` `>` `&` を逃がし、Discord は一斉通知（@everyone 等）を無効にして送る（本文にはプロセス名・ドメインなど外から来た文字列が入るため）。ログに URL を出すときはパスを伏せる。`token` は `json` の受け口に `Authorization: Bearer` で付ける |
 | `[notify] heartbeat_url` | 空 | 死活監視の push URL（healthchecks.io・Uptime Kuma 等）。kanmon が止められたことを外側で検知させる |
 | `local_blocklists` | `blocklist.txt` | 改行区切りの拒否リスト（IP・CIDR・ドメイン） |
 | `[[feeds]]` | Feodo・Spamhaus DROP | 脅威インテルのフィード。https のみ、日次で更新 |

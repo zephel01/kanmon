@@ -217,6 +217,31 @@ pub struct NotifyCfg {
     pub alert_timeout_s: u64,
     /// メニューバーアプリが接続中は、OS ローカル通知（ダイアログ・バナー）をアプリに任せる
     pub defer_to_app: bool,
+    /// Webhook（汎用 JSON・Slack・Discord）。`[[notify.webhooks]]` で複数書ける
+    pub webhooks: Vec<WebhookCfg>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebhookCfg {
+    /// 送り先。https のみ（ループバックだけは http も可：手元の中継・テスト用）
+    pub url: String,
+    /// json（汎用）/ slack / discord
+    #[serde(default = "default_webhook_format")]
+    pub format: String,
+    /// この送り先に送る最低レベル（省略時は notify.min_level と同じ）
+    #[serde(default)]
+    pub min_level: Option<String>,
+    /// ホスト名を入れる（社外のサービスに送るので既定は入れない）
+    #[serde(default)]
+    pub include_host: bool,
+    /// `Authorization: Bearer …`（汎用 JSON の受け口用。空なら付けない）
+    #[serde(default)]
+    pub token: String,
+}
+
+fn default_webhook_format() -> String {
+    "json".into()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -264,6 +289,7 @@ impl Default for NotifyCfg {
             alert_level: "warn".into(),
             alert_timeout_s: 600,
             defer_to_app: true,
+            webhooks: vec![],
         }
     }
 }

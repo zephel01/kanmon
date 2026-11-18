@@ -36,7 +36,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 ## Features
 - 🔍 **Per-process attribution**: each connection is recorded with its executable, signature (Apple / Developer ID / ad-hoc / unsigned), owning package, SHA-256 and parent chain
 - 🧩 **Rules as YAML**: write a rule, back-test it on past logs with `kanmonctl replay`, then drop it in place. The daemon hot-reloads it within 5 seconds
-- 💬 **Alerts that explain themselves**: reasons, points, process and destination in full. Warnings and above stay on screen until you dismiss them
+- 💬 **Alerts that explain themselves**: reasons, points, process and destination in full. Warnings and above stay on screen until you dismiss them. They can also go out via ntfy or webhooks (generic JSON, Slack, Discord)
 - 🪤 **Persistence watch**: flags new or changed Claude Code hooks, VS Code folder-open tasks, `.pth` files, Git hooks, launch agents and similar dev-tool persistence (read-only)
 - 🔬 **Package update inspection**: `kanmonctl inspect pypi:name==version` diffs a release against the previous one and looks for what stealers tend to add (`.pth` startup hooks, install scripts, environment harvesting, credential paths, hidden URLs, blockchain RPC endpoints, …). Nothing is executed or unpacked to disk
 - 📦 **Upload volume**: judges how much was sent together with the files the process has open (`.env`, `.git` objects, GGUF, …) and the destination, so a model upload is told apart from exfiltration
@@ -76,7 +76,7 @@ flowchart LR
   F --> D["Detections<br/>detections/*.yaml"]
   D --> O["Score → level"]
   R["Allow / deny rules<br/>rules.json"] --> O
-  O --> N["Alerts<br/>dialog / D-Bus / ntfy"]
+  O --> N["Alerts<br/>dialog / D-Bus / ntfy / webhook"]
   O --> L["Storage<br/>JSONL (ECS) / SQLite"]
   L -. "kanmonctl replay" .-> D
 ```
