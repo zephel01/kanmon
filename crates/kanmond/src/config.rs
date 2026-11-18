@@ -98,7 +98,8 @@ pub struct VolumeCfg {
 
 impl Default for VolumeCfg {
     fn default() -> Self {
-        Self { enabled: true, interval_s: 10, window_s: 600, min_report_kb: 1024, report_every_min: 30 }
+        // Windows では送信量を取らない（beta の範囲外）
+        Self { enabled: !cfg!(windows), interval_s: 10, window_s: 600, min_report_kb: 1024, report_every_min: 30 }
     }
 }
 
@@ -190,7 +191,12 @@ pub struct LogCfg {
 impl Default for LogCfg {
     fn default() -> Self {
         Self {
-            path: if cfg!(target_os = "macos") { default_base().2.join("kanmond.log") } else { PathBuf::new() },
+            // macOS（launchd）と Windows（サービス）は標準エラーが残らないので、ファイルに書く
+            path: if cfg!(any(target_os = "macos", windows)) {
+                default_base().2.join("kanmond.log")
+            } else {
+                PathBuf::new()
+            },
             keep_days: 14,
         }
     }
@@ -257,7 +263,14 @@ fn yes() -> bool {
     true
 }
 
+/// 既定の置き場所：（データ, 設定とルール, ログ）
 fn default_base() -> (PathBuf, PathBuf, PathBuf) {
+    if cfg!(windows) {
+        // C:\ProgramData\kanmon（kanmon-setup.ps1 が Administrators と SYSTEM だけが書けるようにする）
+        let pd = std::env::var_os("ProgramData").map(PathBuf::from).unwrap_or_else(|| "C:\\ProgramData".into());
+        let base = pd.join("kanmon");
+        return (base.join("data"), base.clone(), base.join("logs"));
+    }
     if cfg!(target_os = "macos") {
         (
             "/Library/Application Support/kanmon".into(),
@@ -353,7 +366,9 @@ impl Default for Config {
             local_blocklists: vec![etc.join("blocklist.txt")],
             beacon_report_min: 0.6,
             beacon_interval_s: 300,
-            status_socket: if cfg!(target_os = "macos") {
+            status_socket: if cfg!(windows) {
+                "\\\\.\\pipe\\kanmon".into()
+            } else if cfg!(target_os = "macos") {
                 "/var/run/kanmond.sock".into()
             } else {
                 "/run/kanmon/kanmond.sock".into()

@@ -2,9 +2,11 @@
 //! kanmond は root で動くので、`~` は「ログイン中のユーザーのホーム」に読み替える。
 //! - macOS：`/dev/console` の所有者（画面にログインしている人）
 //! - Linux：`/run/user/<uid>` があるユーザー（uid 1000 以上）
+//! - Windows：`C:\\Users` の下で、ユーザーのプロファイル（NTUSER.DAT）がある人（Public・Default 等は除く）
 
 use std::path::PathBuf;
 
+#[cfg(unix)]
 fn home_of(uid: u32) -> Option<PathBuf> {
     unsafe {
         let pw = libc::getpwuid(uid);
@@ -16,9 +18,38 @@ fn home_of(uid: u32) -> Option<PathBuf> {
     }
 }
 
-/// 走査するユーザーのホーム。root で動いていないときは自分のホーム
+/// Windows：プロファイルのあるユーザーのホーム
+#[cfg(windows)]
 pub fn user_homes() -> Vec<PathBuf> {
-    if unsafe { libc::geteuid() } != 0 {
+    if !crate::sys::is_root() {
+        return std::env::var_os("USERPROFILE").map(PathBuf::from).into_iter().collect();
+    }
+    let base = std::env::var_os("SystemDrive")
+        .map(|d| PathBuf::from(format!("{}\\Users", d.to_string_lossy())))
+        .unwrap_or_else(|| PathBuf::from("C:\\Users"));
+    windows_homes(&base)
+}
+
+/// `Users` の下のホーム（NTUSER.DAT があるもの。既定・共有のプロファイルは除く）
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn windows_homes(base: &std::path::Path) -> Vec<PathBuf> {
+    let skip = ["public", "default", "default user", "all users", "defaultapppool", "wdagutilityaccount"];
+    let Ok(rd) = std::fs::read_dir(base) else { return vec![] };
+    let mut v: Vec<PathBuf> = rd
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter(|e| !skip.contains(&e.file_name().to_string_lossy().to_lowercase().as_str()))
+        .map(|e| e.path())
+        .filter(|p| p.join("NTUSER.DAT").exists())
+        .collect();
+    v.sort();
+    v
+}
+
+/// 走査するユーザーのホーム。root で動いていないときは自分のホーム
+#[cfg(unix)]
+pub fn user_homes() -> Vec<PathBuf> {
+    if !crate::sys::is_root() {
         return std::env::var_os("HOME").map(PathBuf::from).into_iter().collect();
     }
     let mut uids: Vec<u32> = vec![];
@@ -67,6 +98,19 @@ pub fn expand_roots(roots: &[String], homes: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_profiles() {
+        let t = std::env::temp_dir().join(format!("kanmon-users-{}", std::process::id()));
+        for (d, has) in [("alice", true), ("Public", true), ("Default", true), ("bob", false)] {
+            std::fs::create_dir_all(t.join(d)).unwrap();
+            if has {
+                std::fs::write(t.join(d).join("NTUSER.DAT"), b"").unwrap();
+            }
+        }
+        assert_eq!(windows_homes(&t), vec![t.join("alice")]);
+        std::fs::remove_dir_all(&t).ok();
+    }
 
     #[test]
     fn expands_tilde() {

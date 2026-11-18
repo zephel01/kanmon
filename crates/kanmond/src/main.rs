@@ -4,6 +4,7 @@
 //!   sudo kanmond --config /etc/kanmon/kanmon.toml
 //!   kanmond --config ./dev.toml --print          # イベントを標準出力にも出す
 //!   kanmond --config ./dev.toml --once --print   # 1 回だけ収集して終了（動作確認用）
+//!   kanmond --service --config C:\ProgramData\kanmon\kanmon.toml   # Windows のサービスとして（SCM から起動）
 
 /// kanmond のログ 1 行（先頭に時刻を付ける）
 #[macro_export]
@@ -17,6 +18,7 @@ macro_rules! logln {
     };
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 mod capture;
 mod config;
 mod dnswatch;
@@ -29,7 +31,14 @@ mod persistwatch;
 mod procinfo;
 mod sockets;
 mod status;
+mod sys;
 mod volume;
+#[cfg(any(windows, test))]
+mod winpersist;
+#[cfg(windows)]
+mod winsvc;
+#[cfg(windows)]
+mod winsysmon;
 
 use clap::Parser;
 
@@ -51,20 +60,34 @@ struct Args {
     /// --once のとき、収集前に待つミリ秒（DNS・SNI の観測を取り込むため）
     #[arg(long, default_value_t = 0)]
     wait_ms: u64,
+    /// Windows のサービスとして動く（サービス コントロール マネージャーから起動されたとき）
+    #[arg(long)]
+    service: bool,
 }
 
-fn main() -> anyhow::Result<()> {
-    let a = Args::parse();
-    let cfg = config::Config::load(a.config.as_deref())?;
+/// 設定を読み、ログを開き、監視を用意する（コンソール・サービス共通）
+pub(crate) fn start_monitor(config: Option<&std::path::Path>) -> anyhow::Result<monitor::Monitor> {
+    let cfg = config::Config::load(config)?;
     if !cfg.log.path.as_os_str().is_empty() {
         if let Err(e) = logfile::init(&cfg.log.path, cfg.log.keep_days) {
             eprintln!("kanmond: ログファイル {} を開けません（標準エラーに出します）: {e}", cfg.log.path.display());
         }
     }
-    if unsafe { libc::geteuid() } != 0 {
-        logln!("root 以外で実行中です。他ユーザーのプロセスは帰属・識別できません");
+    if !sys::is_root() {
+        logln!("管理者以外で実行中です。他ユーザーのプロセスは帰属・識別できません");
     }
-    let mut m = monitor::Monitor::new(cfg)?;
+    monitor::Monitor::new(cfg)
+}
+
+fn main() -> anyhow::Result<()> {
+    let a = Args::parse();
+    if a.service {
+        #[cfg(windows)]
+        return winsvc::run(a.config);
+        #[cfg(not(windows))]
+        anyhow::bail!("--service は Windows だけで使えます");
+    }
+    let mut m = start_monitor(a.config.as_deref())?;
     m.print = a.print;
     if a.once {
         // DNS・SNI の観測を少し待ってから 1 回だけ収集する（--once のとき）

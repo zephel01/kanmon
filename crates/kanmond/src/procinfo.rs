@@ -1,5 +1,6 @@
 //! プロセス情報（実行ファイル・親・引数・ユーザー）。
 //! Linux は /proc、macOS は libproc（proc_pidpath / proc_pidinfo）と sysctl(KERN_PROCARGS2)。
+//! Windows は Sysmon のプロセス表（コマンドライン・ユーザー・親）と Win32 API（実行ファイル・開始時刻・親）。
 
 use std::collections::HashMap;
 
@@ -15,12 +16,28 @@ pub struct ProcInfo {
     pub memfd: bool,
     /// プロセス開始時刻（pid 再利用の判別用）
     pub start: u64,
+    /// ユーザー名（Windows は Sysmon の User。Unix は uid から引くので None）
+    pub user: Option<String>,
 }
 
+#[cfg(not(windows))]
 pub fn basename(p: &str) -> String {
     p.rsplit('/').next().unwrap_or(p).to_string()
 }
 
+/// Windows：`\` と `/` の両方で区切り、小文字にそろえる（Windows の名前は大文字小文字を区別しない。
+/// 検知ルールのリストは小文字で書く）
+#[cfg(windows)]
+pub fn basename(p: &str) -> String {
+    kanmon_core::sysmon::win_basename(p).to_lowercase()
+}
+
+#[cfg(windows)]
+pub fn user_name(_uid: u32) -> Option<String> {
+    None
+}
+
+#[cfg(unix)]
 pub fn user_name(uid: u32) -> Option<String> {
     // getpwuid はスレッド安全ではないが、呼び出しは監視スレッドのみ
     unsafe {
@@ -58,7 +75,7 @@ pub fn read(pid: u32) -> Option<ProcInfo> {
     let uid = std::fs::read_to_string(format!("/proc/{pid}/status")).ok().and_then(|s| {
         s.lines().find(|l| l.starts_with("Uid:")).and_then(|l| l.split_whitespace().nth(1)).and_then(|x| x.parse().ok())
     });
-    Some(ProcInfo { pid, ppid, uid, exe, args, exe_deleted: deleted, memfd, start })
+    Some(ProcInfo { pid, ppid, uid, exe, args, exe_deleted: deleted, memfd, start, user: None })
 }
 
 #[cfg(target_os = "macos")]
@@ -90,6 +107,7 @@ pub fn read(pid: u32) -> Option<ProcInfo> {
             exe_deleted: deleted,
             memfd: false,
             start: info.pbi_start_tvsec,
+            user: None,
         })
     }
 }
@@ -139,7 +157,122 @@ pub fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
     Some(out)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(windows)]
+mod win {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    /// 実行ファイルのパスと開始時刻（FILETIME の 100ns 単位）。終わったプロセスは None
+    pub fn exe_and_start(pid: u32) -> Option<(Option<String>, u64)> {
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let mut buf = vec![0u16; 32_768];
+            let mut len = buf.len() as u32;
+            let exe = (QueryFullProcessImageNameW(h, 0, buf.as_mut_ptr(), &mut len) != 0)
+                .then(|| String::from_utf16_lossy(&buf[..len as usize]));
+            let z = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+            let (mut c, mut e, mut k, mut u) = (z, z, z, z);
+            let start = if GetProcessTimes(h, &mut c, &mut e, &mut k, &mut u) != 0 {
+                ((c.dwHighDateTime as u64) << 32) | c.dwLowDateTime as u64
+            } else {
+                0
+            };
+            CloseHandle(h);
+            Some((exe, start))
+        }
+    }
+
+    /// pid → 親の pid（2 秒ごとに取り直す）
+    /// （最後に取った時刻, pid → 親の pid）
+    type Parents = (Option<Instant>, HashMap<u32, u32>);
+
+    pub fn parent_of(pid: u32) -> Option<u32> {
+        static C: OnceLock<Mutex<Parents>> = OnceLock::new();
+        let m = C.get_or_init(|| Mutex::new((None, HashMap::new())));
+        let mut g = m.lock().ok()?;
+        // 2 秒たったか、知らない pid なら取り直す（ただし 200ms より短い間隔では取り直さない）
+        let stale = g.0.is_none_or(|t| t.elapsed() > Duration::from_secs(2)) || !g.1.contains_key(&pid);
+        if stale && g.0.is_none_or(|t| t.elapsed() > Duration::from_millis(200)) {
+            g.1 = snapshot();
+            g.0 = Some(Instant::now());
+        }
+        g.1.get(&pid).copied()
+    }
+
+    fn snapshot() -> HashMap<u32, u32> {
+        let mut out = HashMap::new();
+        unsafe {
+            let s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if s == INVALID_HANDLE_VALUE {
+                return out;
+            }
+            let mut e: PROCESSENTRY32W = std::mem::zeroed();
+            e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            if Process32FirstW(s, &mut e) != 0 {
+                loop {
+                    out.insert(e.th32ProcessID, e.th32ParentProcessID);
+                    if Process32NextW(s, &mut e) == 0 {
+                        break;
+                    }
+                }
+            }
+            CloseHandle(s);
+        }
+        out
+    }
+}
+
+/// Windows：Win32 API で実行ファイル・開始時刻・親を読み、Sysmon の表でコマンドライン・ユーザーを補う。
+/// プロセスが終わっていても、Sysmon の表に残っていればそれを使う（短い接続の帰属のため）
+#[cfg(windows)]
+pub fn read(pid: u32) -> Option<ProcInfo> {
+    if pid == 0 || pid == 4 {
+        // System Idle・System（カーネル）
+        return Some(ProcInfo { pid, exe: Some("System".into()), ..Default::default() });
+    }
+    let sm = crate::winsysmon::lookup(pid);
+    let live = win::exe_and_start(pid);
+    let (exe, start) = match (&live, &sm) {
+        (Some((exe, start)), _) => (exe.clone().or_else(|| sm.as_ref().map(|e| e.image.clone())), *start),
+        (None, Some(e)) => (Some(e.image.clone()), 0),
+        (None, None) => return None,
+    };
+    // Sysmon の表が同じ実行ファイルのものならコマンドラインを使う（pid の使い回しに備えて実行ファイルで確かめる）
+    let same = |e: &crate::winsysmon::Entry| exe.as_deref().is_some_and(|x| x.eq_ignore_ascii_case(&e.image));
+    let sm = sm.filter(same);
+    let args = sm
+        .as_ref()
+        .map(|e| kanmon_core::sysmon::split_command_line(&e.command_line))
+        .filter(|a| !a.is_empty())
+        .or_else(|| exe.clone().map(|x| vec![x]))
+        .unwrap_or_default();
+    let ppid = win::parent_of(pid).or(sm.as_ref().and_then(|e| e.parent_pid)).unwrap_or(0);
+    let deleted = exe.as_deref().is_some_and(|e| e != "System" && !std::path::Path::new(e).exists());
+    Some(ProcInfo {
+        pid,
+        ppid,
+        uid: None,
+        exe,
+        args,
+        exe_deleted: deleted && live.is_some(),
+        memfd: false,
+        start,
+        user: sm.and_then(|e| e.user),
+    })
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub fn read(_pid: u32) -> Option<ProcInfo> {
     None
 }
@@ -172,7 +305,7 @@ impl ProcCache {
             }
             let Some(p) = self.get(cur) else { break };
             out.push((cur, p.exe.clone(), p.args.clone()));
-            if p.ppid == cur || cur == 1 {
+            if p.ppid == cur || cur == 1 || (cfg!(windows) && cur == 4) {
                 break;
             }
             cur = p.ppid;

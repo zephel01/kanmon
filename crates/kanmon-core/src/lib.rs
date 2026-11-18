@@ -22,6 +22,7 @@ pub mod rules;
 pub mod scoring;
 #[cfg(feature = "sqlite")]
 pub mod store;
+pub mod sysmon;
 pub mod volume;
 pub mod wire;
 

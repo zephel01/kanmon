@@ -17,12 +17,32 @@ hex.workspace = true
 chrono.workspace = true
 ureq.workspace = true
 clap.workspace = true
-libc.workspace = true
 pcap = { version = "2", optional = true }
 # N3：DNS の答えの IP が、そのドメインの正しい証明書を出すかを確かめる（ureq と同じ rustls を使う）
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
 rustls-native-certs = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# Windows：Sysmon の購読・接続の一覧・名前付きパイプ・サービス・レジストリ・イベントログ
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_EventLog",
+  "Win32_System_Threading",
+  "Win32_System_Pipes",
+  "Win32_System_IO",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_Networking_WinSock",
+] }
+windows-service = "0.8"
+winreg = "0.56"
 
 [dev-dependencies]
 rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }

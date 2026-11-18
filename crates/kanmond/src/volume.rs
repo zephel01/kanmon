@@ -268,6 +268,12 @@ pub fn parse_nettop(text: &str) -> Vec<FlowBytes> {
     out
 }
 
+/// Windows 等：送信量は取らない（beta の範囲外。`GetPerTcpConnectionEStats` は後で）
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn collect(_inode_pid: &HashMap<u64, u32>) -> Vec<FlowBytes> {
+    vec![]
+}
+
 #[cfg(target_os = "macos")]
 pub fn collect(_inode_pid: &HashMap<u64, u32>) -> Vec<FlowBytes> {
     match std::process::Command::new("/usr/bin/nettop")

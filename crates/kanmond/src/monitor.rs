@@ -84,6 +84,8 @@ pub struct Monitor {
     persist_recent: Vec<kanmon_core::persist::Recent>,
     /// 見張る site-packages と、その更新時刻（.pth の追加に早く気づくため）
     persist_sites: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+    /// Windows：Sysmon（ID 3）で見た接続。次の tick で一覧に足して評価する
+    extra_socks: Vec<Sock>,
     last_site_check: Instant,
     pub print: bool,
 }
@@ -100,17 +102,11 @@ fn dir_mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
 type DohResult = (String, Vec<std::net::IpAddr>, std::result::Result<crate::dnswatch::Crosscheck, String>);
 
 pub(crate) fn hostname() -> String {
-    let mut buf = [0u8; 256];
-    let r = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
-    if r != 0 {
-        return "unknown".into();
-    }
-    let end = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
-    String::from_utf8_lossy(&buf[..end]).into_owned()
+    crate::sys::hostname()
 }
 
 fn is_root() -> bool {
-    unsafe { libc::geteuid() == 0 }
+    crate::sys::is_root()
 }
 
 impl Monitor {
@@ -142,7 +138,7 @@ impl Monitor {
         let intel = crate::feeds::load(&cfg);
         logln!("脅威インテル {} 件", intel.len());
         let host = cfg.host_name.clone().unwrap_or_else(hostname);
-        let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
+        let os = crate::sys::OS;
         let learning_until = (cfg.mode == "learning" && cfg.learning_days > 0)
             .then(|| chrono::DateTime::from_timestamp(installed_at + cfg.learning_days as i64 * 86_400, 0))
             .flatten()
@@ -181,6 +177,17 @@ impl Monitor {
         }
         let notifier = Notifier::new(&cfg.notify, Some(shared.clone()));
         let rules_mtime = std::fs::metadata(&cfg.rules_file).and_then(|m| m.modified()).ok();
+        // Windows：Sysmon の記録（DNS・接続・プロセスの起動）を読むスレッドから観測を受け取る
+        #[cfg(windows)]
+        let obs_rx = {
+            let (tx, rx) = std::sync::mpsc::sync_channel(10_000);
+            match crate::winsysmon::start(tx) {
+                Ok(()) => logln!("Sysmon の記録を購読（{}）", kanmon_core::sysmon::CHANNEL),
+                Err(e) => logln!("Sysmon の記録を購読できません。宛先は IP のみ・短い接続は取りこぼします: {e:#}"),
+            }
+            Some(rx)
+        };
+        #[cfg(not(windows))]
         let obs_rx = if cfg.dns.enabled {
             let (tx, rx) = std::sync::mpsc::sync_channel(10_000);
             let devs = crate::capture::start(cfg.dns.interfaces.clone(), tx);
@@ -250,6 +257,7 @@ impl Monitor {
             persist_recent,
             persist_sites: vec![],
             last_site_check: Instant::now(),
+            extra_socks: vec![],
             print: false,
             cfg,
         })
@@ -285,17 +293,21 @@ impl Monitor {
     pub fn tick(&mut self) -> Result<usize> {
         // 先に DNS・SNI の観測を取り込んでから、新しい接続に名前を付ける
         self.drain_obs();
-        let socks = self.collector.snapshot()?;
+        let mut socks = self.collector.snapshot()?;
         let listens = listen_ports(&socks);
+        // Windows：一覧に出る前に終わった短い接続（Sysmon の ID 3）も評価する
+        socks.append(&mut std::mem::take(&mut self.extra_socks));
         let mut cur = HashSet::with_capacity(socks.len());
         let mut n = 0;
         let initial = self.first_tick;
         for s in &socks {
             let k = s.key();
+            if !cur.insert(k) {
+                continue;
+            }
             if !self.prev.contains(&k) && self.handle_new(s, &listens, initial)? {
                 n += 1;
             }
-            cur.insert(k);
         }
         if self.cfg.volume.enabled
             && self.last_volume.is_none_or(|t| t.elapsed() >= Duration::from_secs(self.cfg.volume.interval_s.max(1)))
@@ -412,6 +424,15 @@ impl Monitor {
                     self.last_persist = None;
                 }
             }
+            // Windows：Sysmon が自動起動の場所（Run キー・スタートアップ・タスク等）の変更を記録したら早める
+            #[cfg(windows)]
+            if crate::winsysmon::take_persist_nudge()
+                && !self.persist_running
+                && self.last_persist.is_some_and(|t| t.elapsed() > Duration::from_secs(120))
+            {
+                crate::logln!("居座りの走査：自動起動の場所が変わったので走査し直します");
+                self.last_persist = None;
+            }
             if !self.persist_running && self.last_persist.is_none_or(|t| t.elapsed() > iv) {
                 self.last_persist = Some(Instant::now());
                 self.persist_running = true;
@@ -421,7 +442,17 @@ impl Monitor {
                 let r = std::thread::Builder::new().name("kanmon-persist".into()).spawn(move || {
                     let homes = crate::persistwatch::user_homes();
                     let roots = crate::persistwatch::expand_roots(&pc.roots, &homes);
-                    let _ = tx.send(kanmon_core::persist::scan_with_sites(&roots, &homes, os, pc.system, pc.max_depth));
+                    #[allow(unused_mut)]
+                    let mut r = kanmon_core::persist::scan_with_sites(&roots, &homes, os, pc.system, pc.max_depth);
+                    // Windows：レジストリの Run キーとサービスも足す
+                    #[cfg(windows)]
+                    if pc.system {
+                        r.0.extend(crate::winpersist::registry_items());
+                        let mut keys = std::collections::HashSet::new();
+                        r.0.retain(|i| keys.insert(i.key()));
+                        r.0.sort_by_key(|i| i.key());
+                    }
+                    let _ = tx.send(r);
                 });
                 if r.is_err() {
                     self.persist_running = false;
@@ -736,7 +767,7 @@ impl Monitor {
                 name,
                 args: p.args.iter().take(16).map(|a| a.chars().take(512).collect()).collect(),
                 uid,
-                user: uid.and_then(user_name),
+                user: p.user.clone().or_else(|| uid.and_then(user_name)),
                 hash: id.sha256.clone().map(|h| ev::Hash { sha256: h }),
                 code_signature: Some(ev::CodeSignature {
                     status: id.status.clone(),
@@ -807,7 +838,33 @@ impl Monitor {
                     }
                 }
                 Obs::Dns { server, client, client_port, msg } => self.on_dns(server, client, client_port, &msg, now),
+                Obs::Resolved { name, ips } => self.on_resolved(&name, &ips, now),
+                Obs::Connect(sock) => {
+                    if self.extra_socks.len() < 5_000 {
+                        self.extra_socks.push(sock);
+                    }
+                }
             }
+        }
+    }
+
+    /// Windows：Sysmon の DNS の記録（ID 22）。応答のパケットは見ないので、名前付けと N4（公開ドメインが
+    /// ローカルの IP に解決）だけを行う
+    fn on_resolved(&mut self, name: &str, ips: &[IpAddr], now: i64) {
+        if ips.is_empty() {
+            return;
+        }
+        for ip in ips {
+            self.names.insert_dns(*ip, name, 300, now);
+        }
+        let local_ips = dnsguard::private_answers(name, ips, &self.cfg.dns.private_ok_suffixes);
+        if !local_ips.is_empty() {
+            let facts = ev::DnsFacts {
+                finding: "private_answer".into(),
+                watched: dnsguard::watched(name, &self.cfg.dns.watch_domains),
+                ..Default::default()
+            };
+            self.emit_dns(facts, Some(name.to_string()), &local_ips, None, format!("private|{name}"));
         }
     }
 

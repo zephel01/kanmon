@@ -15,8 +15,26 @@ use std::sync::mpsc::SyncSender;
 /// キャプチャスレッドから監視ループへ渡す観測
 #[derive(Debug, Clone)]
 pub enum Obs {
-    Dns { server: IpAddr, client: IpAddr, client_port: u16, msg: DnsMessage },
-    Sni { local: SocketAddr, remote: SocketAddr, hello: ClientHello },
+    Dns {
+        server: IpAddr,
+        client: IpAddr,
+        client_port: u16,
+        msg: DnsMessage,
+    },
+    Sni {
+        local: SocketAddr,
+        remote: SocketAddr,
+        hello: ClientHello,
+    },
+    /// Windows：Sysmon の DNS の記録（ID 22）。名前と答えの IP
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Resolved {
+        name: String,
+        ips: Vec<IpAddr>,
+    },
+    /// Windows：Sysmon の接続の記録（ID 3）
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Connect(crate::sockets::Sock),
 }
 
 /// BPF フィルタ。IPv4 は TCP ペイロード先頭が 0x16（TLS ハンドシェイク）のものだけ、

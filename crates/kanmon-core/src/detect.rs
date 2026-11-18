@@ -291,8 +291,14 @@ fn expand(v: &Value, lists: &HashMap<String, Vec<String>>) -> Result<Vec<Value>>
     }
 }
 
+/// `~/rest` の前方一致。macOS・Linux のホームに加えて、Windows の `C:\Users\<名前>\rest`
+/// （区切りは `\`、大文字小文字を区別しない）にも当てる
 fn home_prefix_re(rest: &str) -> String {
-    format!("^(?:/Users/[^/]+|/home/[^/]+|/root|/var/root)/{}", regex::escape(rest))
+    let win = regex::escape(&rest.replace('/', "\\"));
+    format!(
+        "^(?:(?:/Users/[^/]+|/home/[^/]+|/root|/var/root)/{}|(?i:[a-z]:\\\\Users\\\\[^\\\\]+\\\\{win}))",
+        regex::escape(rest)
+    )
 }
 
 fn compile(c: &CondDef, lists: &HashMap<String, Vec<String>>) -> Result<Cond> {
@@ -533,6 +539,19 @@ detections:
 
     fn ids(h: &[SignalHit]) -> Vec<&str> {
         h.iter().map(|x| x.id.as_str()).collect()
+    }
+
+    #[test]
+    fn home_prefix_matches_windows_paths() {
+        let s = DetectionSet::from_yaml(Y).unwrap();
+        let hit = |exe: &str| ids(&s.evaluate(&json!({"process": {"executable": exe}}))).contains(&"T1");
+        assert!(hit(r"C:\Users\alice\Downloads\x.exe"));
+        assert!(hit(r"c:\users\Alice\downloads\x.exe"));
+        assert!(hit("/home/bob/Downloads/x"));
+        // 別の部品の途中・他人のホーム以外は当てない
+        assert!(!hit(r"C:\Users\alice\Documents\Downloads\x.exe"));
+        assert!(!hit(r"D:\Data\Users\x\Downloads\y.exe"));
+        assert!(!hit(r"C:\Users\alice\DownloadsX\y.exe"));
     }
 
     #[test]

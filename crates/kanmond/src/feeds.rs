@@ -73,7 +73,7 @@ pub fn load(cfg: &Config) -> Intel {
         }
     }
     for p in &cfg.local_blocklists {
-        if cfg.strict_owner && unsafe { libc::geteuid() } == 0 {
+        if cfg.strict_owner && crate::sys::is_root() {
             if let Err(e) = kanmon_core::detect::check_owner(p) {
                 if p.exists() {
                     logln!("拒否リストを読みません: {e}");

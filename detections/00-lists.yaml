@@ -11,19 +11,37 @@ lists:
     - ~/Downloads/
     - ~/Library/Caches/
     - ~/.cache/
+    # Windows（S4 は大文字小文字を区別せずに比べる）
+    - ~/AppData/Local/Temp/
+    - 'C:\Windows\Temp\'
+    - 'C:\Users\Public\'
+    - 'C:\ProgramData\Temp\'
   shells_interp:
     [bash, sh, zsh, dash, fish, ksh, tcsh, python, python2, python3, perl, ruby, node, bun, deno, php,
-     osascript, pwsh, powershell, lua, tclsh]
-  downloaders: [curl, wget, nc, ncat, netcat, socat, telnet, openssl]
+     osascript, pwsh, powershell, lua, tclsh,
+     # Windows（kanmond は Windows のプロセス名を小文字にそろえる）
+     cmd.exe, powershell.exe, pwsh.exe, wscript.exe, cscript.exe, mshta.exe, python.exe, pythonw.exe, py.exe,
+     node.exe, bun.exe, deno.exe, perl.exe, ruby.exe, php.exe, bash.exe, sh.exe, wsl.exe]
+  downloaders: [curl, wget, nc, ncat, netcat, socat, telnet, openssl,
+                curl.exe, wget.exe, nc.exe, nc64.exe, ncat.exe, certutil.exe, bitsadmin.exe]
   # 「ここからシェルが起動して通信」は不審（設計書 S6）
   doc_apps:
     ["Microsoft Word", "Microsoft Excel", "Microsoft PowerPoint", "Microsoft Outlook", Preview, Pages, Numbers,
      Keynote, Mail, "Adobe Acrobat", AdobeAcrobat, "Adobe Acrobat Reader", Thunderbird, thunderbird, soffice.bin,
-     soffice, libreoffice, evince, okular, xreader]
+     soffice, libreoffice, evince, okular, xreader,
+     winword.exe, excel.exe, powerpnt.exe, outlook.exe, onenote.exe, acrord32.exe, acrobat.exe, sumatrapdf.exe,
+     thunderbird.exe, soffice.exe, olk.exe, hwp.exe, ichitaro.exe]
   browsers:
     ["Google Chrome", "Google Chrome Helper", chrome, chromium, chromium-browser, firefox, firefox-bin, Safari,
      "Microsoft Edge", "Microsoft Edge Helper", msedge, "Brave Browser", brave, Arc, Vivaldi, vivaldi-bin, opera,
-     com.apple.WebKit.Networking]
+     com.apple.WebKit.Networking,
+     chrome.exe, msedge.exe, firefox.exe, brave.exe, opera.exe, vivaldi.exe, iexplore.exe, msedgewebview2.exe]
+  # Windows 標準のコマンドのうち、ダウンロードや外部のコードの実行に悪用されやすいもの（LOLBin）。
+  # 通常の利用ではインターネットへ自分から接続することがまず無い
+  lolbins: [rundll32.exe, regsvr32.exe, mshta.exe, msbuild.exe, installutil.exe, regasm.exe, regsvcs.exe,
+            cmstp.exe, odbcconf.exe, certutil.exe, bitsadmin.exe, msxsl.exe, wmic.exe, forfiles.exe, pcalua.exe,
+            hh.exe, presentationhost.exe, ieexec.exe, microsoft.workflow.compiler.exe, csc.exe, vbc.exe,
+            wscript.exe, cscript.exe]
   # ブラウザの補助プロセス（「Google Chrome Helper (Renderer)」等、版や役割で名前が変わる）を前方一致で見る
   browser_prefixes:
     ["Google Chrome", "Chromium", "Microsoft Edge", "Brave Browser", "Arc Helper", Vivaldi, Opera, Firefox,

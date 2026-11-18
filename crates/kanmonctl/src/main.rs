@@ -152,7 +152,9 @@ enum Cmd {
 }
 
 const fn default_jsonl() -> &'static str {
-    if cfg!(target_os = "macos") {
+    if cfg!(windows) {
+        "C:\\ProgramData\\kanmon\\logs\\events.jsonl"
+    } else if cfg!(target_os = "macos") {
         "/Library/Logs/kanmon/events.jsonl"
     } else {
         "/var/log/kanmon/events.jsonl"
@@ -160,7 +162,9 @@ const fn default_jsonl() -> &'static str {
 }
 
 const fn default_db() -> &'static str {
-    if cfg!(target_os = "macos") {
+    if cfg!(windows) {
+        "C:\\ProgramData\\kanmon\\data\\kanmon.db"
+    } else if cfg!(target_os = "macos") {
         "/Library/Application Support/kanmon/kanmon.db"
     } else {
         "/var/lib/kanmon/kanmon.db"
@@ -390,13 +394,19 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Scan { root, system, risky, kind, json, max_depth } => {
-            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
             let roots: Vec<PathBuf> = if root.is_empty() {
                 home.iter().map(|h| h.join("kanmon-work")).filter(|p| p.is_dir()).collect()
             } else {
                 root
             };
-            let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
+            let os = if cfg!(windows) {
+                "windows"
+            } else if cfg!(target_os = "macos") {
+                "macos"
+            } else {
+                "linux"
+            };
             let homes: Vec<PathBuf> = home.into_iter().collect();
             let mut items = kanmon_core::persist::scan(&roots, &homes, os, system, max_depth);
             if let Some(k) = &kind {

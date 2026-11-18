@@ -347,7 +347,46 @@ impl Local {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+/// Windows：サービスは利用者の画面に出せない（セッション 0）。画面の通知はトレイ（kanmon-tray）が出すので、
+/// ここでは Windows のイベントログ（アプリケーション、ソース `kanmon`）に書く。
+/// ソースは kanmon-setup.ps1 が登録する。無ければ Windows が既定の扱いで書く（説明の文が付かないだけ）
+#[cfg(windows)]
+impl Local {
+    fn show(&mut self, m: &Message, _alert: bool, _timeout_s: u64) {
+        use windows_sys::Win32::System::EventLog::{
+            DeregisterEventSource, RegisterEventSourceW, ReportEventW, EVENTLOG_ERROR_TYPE, EVENTLOG_INFORMATION_TYPE,
+            EVENTLOG_WARNING_TYPE,
+        };
+        let w = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let src = w("kanmon");
+        // 本文は 1 件 31,839 文字までなので、余裕を持って切る
+        let text: String = format!("{}\n\n{}", m.title, m.body).chars().take(8000).collect();
+        let msg = w(&text);
+        let ty = match m.level {
+            Level::Critical => EVENTLOG_ERROR_TYPE,
+            Level::Warn => EVENTLOG_WARNING_TYPE,
+            _ => EVENTLOG_INFORMATION_TYPE,
+        };
+        // イベント ID：notice 1、warn 2、critical 3（イベント ビューアーでの絞り込み用）
+        let id = match m.level {
+            Level::Critical => 3,
+            Level::Warn => 2,
+            _ => 1,
+        };
+        unsafe {
+            let h = RegisterEventSourceW(std::ptr::null(), src.as_ptr());
+            if h.is_null() {
+                logln!("イベントログに書けません");
+                return;
+            }
+            let strs = [msg.as_ptr()];
+            ReportEventW(h, ty, 0, id, std::ptr::null_mut(), 1, 0, strs.as_ptr(), std::ptr::null());
+            DeregisterEventSource(h);
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 impl Local {
     fn show(&mut self, _m: &Message, _alert: bool, _timeout_s: u64) {}
 }

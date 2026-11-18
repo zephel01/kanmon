@@ -70,7 +70,7 @@ detections:
       all:
         - { field: destination.domain, op: missing }
         - { field: kanmon.bytes.out, op: gte, value: 104857600 }
-        - { field: process.code_signature.status, op: not_in, value: [apple, developer_id, app_store, package] }
+        - { field: process.code_signature.status, op: not_in, value: [apple, developer_id, app_store, package, microsoft] }
 
   - id: V9
     name: model_upload_to_known_host

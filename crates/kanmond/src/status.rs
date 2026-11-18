@@ -1,22 +1,28 @@
 //! 状態ソケット（読み取り専用）。メニューバーアプリ等が kanmond の状態と直近の警告を取得する。
 //!
-//! - Unix ドメインソケット。1 行の JSON 要求に 1 行の JSON で答えて閉じる
+//! - Unix ドメインソケット（Windows は名前付きパイプ `\\.\pipe\kanmon`）。1 行の JSON 要求に 1 行の JSON で答えて閉じる
 //!   - `{"cmd":"status"}` → 状態スナップショット
 //!   - `{"cmd":"ping"}`   → `{"ok":true}`
 //!   - `{"cmd":"alerts","level":"notice","hours":24,"limit":500}` → 期間内の警告の一覧とルール別の件数
 //!     （DB を読み取り専用で開いて読む。level は all / notice / warn / critical）
 //! - 設定は変更できない（読み取り専用）。モード変更などは管理者認証つきの別経路で行う
 //! - 接続相手の uid を検証する：root・ログイン中のユーザー・`status_allowed_uids` のみ
+//!   （Windows はパイプの ACL で絞る：SYSTEM・Administrators・対話ログオンのユーザーのみ。ネットワーク経由は拒否）
 //! - アプリが接続している間（直近 15 秒以内に要求あり）は、OS ローカル通知をアプリに任せる
 
-use anyhow::{Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::Result;
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
 use std::time::Duration;
 
 pub const MAX_ALERTS: usize = 50;
@@ -219,12 +225,13 @@ pub fn peer_uid(s: &UnixStream) -> Option<u32> {
     (r == 0).then_some(cred.uid)
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 pub fn peer_uid(_s: &UnixStream) -> Option<u32> {
     None
 }
 
 /// 接続を許す uid か：root、ログイン中のユーザー、設定で許可した uid
+#[cfg(unix)]
 pub fn uid_allowed(uid: u32, extra: &[u32]) -> bool {
     if uid == 0 || extra.contains(&uid) {
         return true;
@@ -245,6 +252,7 @@ pub fn uid_allowed(uid: u32, extra: &[u32]) -> bool {
     false
 }
 
+#[cfg(unix)]
 fn handle(mut s: UnixStream, shared: &Shared, extra: &[u32]) {
     let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
@@ -264,6 +272,7 @@ fn handle(mut s: UnixStream, shared: &Shared, extra: &[u32]) {
 }
 
 /// ソケットを作って待ち受けスレッドを起動する
+#[cfg(unix)]
 pub fn serve(path: &Path, shared: Arc<Shared>, extra_uids: Vec<u32>) -> Result<PathBuf> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
@@ -290,6 +299,154 @@ pub fn serve(path: &Path, shared: Arc<Shared>, extra_uids: Vec<u32>) -> Result<P
         }
     })?;
     Ok(p)
+}
+
+/// Windows：名前付きパイプを作って待ち受けスレッドを起動する。`extra_uids` は使わない（ACL で絞る）
+#[cfg(windows)]
+pub fn serve(path: &Path, shared: Arc<Shared>, _extra_uids: Vec<u32>) -> Result<PathBuf> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{LocalFree, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
+    use windows_sys::Win32::System::Pipes::{
+        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+        PIPE_WAIT,
+    };
+
+    let name: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    // SYSTEM・Administrators はすべて、対話ログオンのユーザー（INTERACTIVE）は読み書き（要求の 1 行を書くため）、
+    // ネットワーク経由のログオン（NETWORK）は拒否。継承はしない（P）
+    let sddl: Vec<u16> = "D:P(D;;GA;;;NU)(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)".encode_utf16().chain([0]).collect();
+    let mut psd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let ok = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut psd,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        anyhow::bail!("パイプの権限を作れません");
+    }
+    // SECURITY_DESCRIPTOR は待ち受けの間ずっと使うので解放しない（1 回だけ作る）
+    let psd_n = psd as usize;
+    let create = move |first: bool| unsafe {
+        let sa = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: psd_n as PSECURITY_DESCRIPTOR,
+            bInheritHandle: 0,
+        };
+        let mode = PIPE_ACCESS_DUPLEX | if first { FILE_FLAG_FIRST_PIPE_INSTANCE } else { 0 };
+        CreateNamedPipeW(
+            name.as_ptr(),
+            mode,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
+            4096,
+            4096,
+            2000,
+            &sa,
+        )
+    };
+    // 最初の 1 つは FILE_FLAG_FIRST_PIPE_INSTANCE で作る。同じ名前を他のプロセスが先に作っていたら失敗する
+    // （偽の kanmond に成りすまされるのを防ぐ）
+    let first = create(true);
+    if first == INVALID_HANDLE_VALUE {
+        unsafe { LocalFree(psd as _) };
+        anyhow::bail!("{} を作れません（同じ名前のパイプが既にある可能性）", path.display());
+    }
+    let first_n = first as usize;
+    std::thread::Builder::new().name("status".into()).spawn(move || {
+        let mut next = Some(first_n);
+        loop {
+            let h = match next.take() {
+                Some(h) => h,
+                None => {
+                    let h = create(false);
+                    if h == INVALID_HANDLE_VALUE {
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        continue;
+                    }
+                    h as usize
+                }
+            };
+            if !pipe_wait(h) {
+                pipe_close(h);
+                continue;
+            }
+            // 1 件ずつ別のスレッドで答える（要求を書かずに居座る相手で止まらないように）。同時は 8 まで
+            static BUSY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            if BUSY.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 8 {
+                BUSY.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                pipe_close(h);
+                continue;
+            }
+            let sh = shared.clone();
+            let spawned = std::thread::Builder::new().name("status-conn".into()).spawn(move || {
+                pipe_answer(h, &sh);
+                pipe_close(h);
+                BUSY.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            });
+            if spawned.is_err() {
+                BUSY.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    })?;
+    Ok(path.to_path_buf())
+}
+
+#[cfg(windows)]
+fn pipe_wait(h: usize) -> bool {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_PIPE_CONNECTED};
+    use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
+    let r = unsafe { ConnectNamedPipe(h as _, std::ptr::null_mut()) };
+    r != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED
+}
+
+#[cfg(windows)]
+fn pipe_close(h: usize) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Pipes::DisconnectNamedPipe;
+    unsafe {
+        DisconnectNamedPipe(h as _);
+        CloseHandle(h as _);
+    }
+}
+
+/// 1 行（最大 MAX_REQUEST バイト）を読み、答えを書く
+#[cfg(windows)]
+fn pipe_answer(h: usize, shared: &Shared) {
+    use windows_sys::Win32::Storage::FileSystem::{FlushFileBuffers, ReadFile, WriteFile};
+    let mut req = Vec::with_capacity(256);
+    let mut buf = [0u8; 512];
+    while req.len() < MAX_REQUEST as usize && !req.contains(&b'\n') {
+        let mut n = 0u32;
+        let ok = unsafe { ReadFile(h as _, buf.as_mut_ptr(), buf.len() as u32, &mut n, std::ptr::null_mut()) };
+        if ok == 0 || n == 0 {
+            break;
+        }
+        req.extend_from_slice(&buf[..n as usize]);
+    }
+    let line = String::from_utf8_lossy(&req);
+    let line = line.split('\n').next().unwrap_or("");
+    let mut out = respond(line, shared);
+    out.push('\n');
+    let b = out.as_bytes();
+    let mut done = 0usize;
+    while done < b.len() {
+        let mut n = 0u32;
+        let ok =
+            unsafe { WriteFile(h as _, b[done..].as_ptr(), (b.len() - done) as u32, &mut n, std::ptr::null_mut()) };
+        if ok == 0 || n == 0 {
+            break;
+        }
+        done += n as usize;
+    }
+    unsafe { FlushFileBuffers(h as _) };
 }
 
 #[cfg(test)]
@@ -399,6 +556,7 @@ mod tests {
         assert_eq!(serde_json::to_value(&snap).unwrap(), fixture);
     }
 
+    #[cfg(unix)]
     #[test]
     fn socket_roundtrip_and_uid() {
         let dir = std::env::temp_dir().join(format!("kanmon-sock-{}", std::process::id()));

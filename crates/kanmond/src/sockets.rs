@@ -3,6 +3,8 @@
 //! - Linux：`/proc/net/{tcp,tcp6,udp,udp6,raw,raw6,packet}` を読み、`/proc/<pid>/fd` の
 //!   `socket:[inode]` でプロセスに帰属させる（netns はデーモン自身のもののみ）。
 //! - macOS：`lsof -nP -iTCP -iUDP -F` の出力を解析する（root で動かさないと他ユーザー分は見えない）。
+//! - Windows：`GetExtendedTcpTable`・`GetExtendedUdpTable`（pid 付き）。一覧に出る前に終わる短い接続は
+//!   Sysmon の ID 3 で補う（monitor が合わせる）。
 //!
 //! 解析関数は OS に依存しない純関数にしてあり、どの OS でもテストできる。
 
@@ -325,11 +327,142 @@ impl MacCollector {
     }
 }
 
+// ---------------------------------------------------------------- Windows
+
+/// Windows の TCP の状態（MIB_TCP_STATE）を変える
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn win_tcp_state(st: u32) -> State {
+    match st {
+        2 => State::Listen,
+        3 => State::SynSent,
+        5 => State::Established,
+        _ => State::Other,
+    }
+}
+
+/// Windows の表の 1 行（IPv4。アドレスとポートはメモリ上でネットワークの順。`to_ne_bytes` でそのまま並べる）
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn win_v4(addr: u32, port: u32) -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::from(addr.to_ne_bytes())), u16::from_be(port as u16))
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn win_v6(addr: [u8; 16], port: u32) -> SocketAddr {
+    SocketAddr::new(IpAddr::V6(Ipv6Addr::from(addr)), u16::from_be(port as u16))
+}
+
+/// TCP の 1 行を Sock にする。TIME_WAIT・CLOSED（pid 0）は除く
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn win_tcp_sock(local: SocketAddr, remote: SocketAddr, state: u32, pid: u32) -> Option<Sock> {
+    if matches!(state, 1 | 11) || pid == 0 {
+        return None;
+    }
+    let st = win_tcp_state(state);
+    let remote_set = !remote.ip().is_unspecified() || remote.port() != 0;
+    Some(Sock {
+        proto: Proto::Tcp,
+        local,
+        remote: (remote_set && st != State::Listen).then_some(remote),
+        state: st,
+        pid: Some(pid),
+        uid: None,
+        inode: 0,
+    })
+}
+
+#[cfg(windows)]
+pub struct WinCollector;
+
+#[cfg(windows)]
+impl WinCollector {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// 表を取る。必要な大きさを聞いてから取り直す（間に増えたら数回まで繰り返す）
+    fn table(tcp: bool, af: u32) -> Vec<u8> {
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            GetExtendedTcpTable, GetExtendedUdpTable, TCP_TABLE_OWNER_PID_ALL, UDP_TABLE_OWNER_PID,
+        };
+        let mut size = 0u32;
+        let mut buf: Vec<u8> = vec![];
+        for _ in 0..4 {
+            let r = unsafe {
+                let p = if buf.is_empty() { std::ptr::null_mut() } else { buf.as_mut_ptr() as *mut _ };
+                if tcp {
+                    GetExtendedTcpTable(p, &mut size, 0, af, TCP_TABLE_OWNER_PID_ALL, 0)
+                } else {
+                    GetExtendedUdpTable(p, &mut size, 0, af, UDP_TABLE_OWNER_PID, 0)
+                }
+            };
+            if r == 0 && !buf.is_empty() {
+                buf.truncate(size as usize);
+                return buf;
+            }
+            // 122 = ERROR_INSUFFICIENT_BUFFER
+            if r != 122 && r != 0 {
+                return vec![];
+            }
+            buf = vec![0u8; size as usize + 4096];
+            size = buf.len() as u32;
+        }
+        vec![]
+    }
+
+    /// 表の行を読む（先頭 4 バイトが件数、続いて行）
+    fn rows<T: Copy>(buf: &[u8]) -> Vec<T> {
+        if buf.len() < 4 {
+            return vec![];
+        }
+        let n = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+        let sz = std::mem::size_of::<T>();
+        let max = (buf.len() - 4) / sz;
+        (0..n.min(max)).map(|i| unsafe { std::ptr::read_unaligned(buf.as_ptr().add(4 + i * sz) as *const T) }).collect()
+    }
+
+    pub fn snapshot(&mut self) -> anyhow::Result<Vec<Sock>> {
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_OWNER_PID, MIB_UDP6ROW_OWNER_PID, MIB_UDPROW_OWNER_PID,
+        };
+        const AF_INET: u32 = 2;
+        const AF_INET6: u32 = 23;
+        let mut out = vec![];
+        for r in Self::rows::<MIB_TCPROW_OWNER_PID>(&Self::table(true, AF_INET)) {
+            let l = win_v4(r.dwLocalAddr, r.dwLocalPort);
+            let rm = win_v4(r.dwRemoteAddr, r.dwRemotePort);
+            out.extend(win_tcp_sock(l, rm, r.dwState, r.dwOwningPid));
+        }
+        for r in Self::rows::<MIB_TCP6ROW_OWNER_PID>(&Self::table(true, AF_INET6)) {
+            let l = win_v6(r.ucLocalAddr, r.dwLocalPort);
+            let rm = win_v6(r.ucRemoteAddr, r.dwRemotePort);
+            out.extend(win_tcp_sock(l, rm, r.dwState, r.dwOwningPid));
+        }
+        let udp = |local: SocketAddr, pid: u32| Sock {
+            proto: Proto::Udp,
+            local,
+            remote: None,
+            state: State::Unconnected,
+            pid: Some(pid),
+            uid: None,
+            inode: 0,
+        };
+        for r in Self::rows::<MIB_UDPROW_OWNER_PID>(&Self::table(false, AF_INET)) {
+            out.push(udp(win_v4(r.dwLocalAddr, r.dwLocalPort), r.dwOwningPid));
+        }
+        for r in Self::rows::<MIB_UDP6ROW_OWNER_PID>(&Self::table(false, AF_INET6)) {
+            out.push(udp(win_v6(r.ucLocalAddr, r.dwLocalPort), r.dwOwningPid));
+        }
+        Ok(out)
+    }
+}
+
 pub enum Collector {
     #[cfg(target_os = "linux")]
     Linux(LinuxCollector),
     #[cfg(target_os = "macos")]
     Mac(MacCollector),
+    #[cfg(windows)]
+    Win(WinCollector),
 }
 
 impl Collector {
@@ -342,6 +475,10 @@ impl Collector {
         {
             return Ok(Collector::Mac(MacCollector::new()));
         }
+        #[cfg(windows)]
+        {
+            return Ok(Collector::Win(WinCollector::new()));
+        }
         #[allow(unreachable_code)]
         Err(anyhow::anyhow!("未対応の OS です"))
     }
@@ -352,6 +489,8 @@ impl Collector {
             Collector::Linux(c) => c.snapshot(),
             #[cfg(target_os = "macos")]
             Collector::Mac(c) => c.snapshot(),
+            #[cfg(windows)]
+            Collector::Win(c) => c.snapshot(),
         }
     }
 }
@@ -413,6 +552,27 @@ mod tests {
                  ffff8880 3      3    0003   2     1 0      0      4242\n";
         let v = parse_proc_packet(t);
         assert_eq!((v[0].proto, v[0].inode, v[0].uid), (Proto::Packet, 4242, Some(0)));
+    }
+
+    #[test]
+    fn windows_rows() {
+        // メモリ上の並びはネットワークの順：203.0.113.10 → [203, 0, 113, 10]、ポート 443 → [0x01, 0xBB]
+        let addr = u32::from_ne_bytes([203, 0, 113, 10]);
+        let port = u16::from_ne_bytes([0x01, 0xBB]) as u32;
+        assert_eq!(win_v4(addr, port).to_string(), "203.0.113.10:443");
+        let local = win_v4(u32::from_ne_bytes([127, 0, 0, 1]), u16::from_ne_bytes([0xC6, 0x41]) as u32);
+        assert_eq!(local.port(), 50753);
+        let s = win_tcp_sock(local, win_v4(addr, port), 5, 4242).unwrap();
+        assert_eq!((s.state, s.pid, s.remote.unwrap().port()), (State::Established, Some(4242), 443));
+        // TIME_WAIT と pid 0 は除く
+        assert!(win_tcp_sock(local, win_v4(addr, port), 11, 4242).is_none());
+        assert!(win_tcp_sock(local, win_v4(addr, port), 5, 0).is_none());
+        // 待受は相手なし
+        let l = win_tcp_sock(local, win_v4(0, 0), 2, 9).unwrap();
+        assert_eq!((l.state, l.remote), (State::Listen, None));
+        let mut v6 = [0u8; 16];
+        v6[15] = 1;
+        assert_eq!(win_v6(v6, port).to_string(), "[::1]:443");
     }
 
     #[test]

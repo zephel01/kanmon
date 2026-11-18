@@ -28,7 +28,7 @@ detections:
     when:
       all:
         - { field: process.file_age_s, op: lt, value: 86400 }
-        - { field: process.code_signature.status, op: not_in, value: [apple, package] }
+        - { field: process.code_signature.status, op: not_in, value: [apple, package, microsoft] }
 
   - id: S4
     name: temp_dir_exec
@@ -38,8 +38,9 @@ detections:
     kinds: [connect, accept, listen, raw_socket]
     when:
       any:
-        - { field: process.executable, op: prefix, value: "@temp_dirs" }
-        - { field: process.script, op: prefix, value: "@temp_dirs" }
+        # Windows のパスは大文字小文字がそろわない（C:\WINDOWS と C:\Windows）ので区別しない
+        - { field: process.executable, op: prefix, value: "@temp_dirs", ci: true }
+        - { field: process.script, op: prefix, value: "@temp_dirs", ci: true }
 
   - id: S5
     name: deleted_memfd_hidden
@@ -70,9 +71,34 @@ detections:
   - id: T-trusted
     name: trusted_publisher
     points: -15
-    # Apple 署名・ディストリ公式パッケージ（減点）。curl・bash 等の「正規ツールの悪用」に使われるものは減点しない
-    description: Apple 署名・公式パッケージ（減点）
+    # Apple 署名・ディストリ公式パッケージ・Windows の Microsoft 署名（減点）。
+    # curl・bash・PowerShell・LOLBin 等の「正規ツールの悪用」に使われるものは減点しない
+    description: Apple 署名・公式パッケージ・Microsoft 署名（減点）
     when:
       all:
-        - { field: process.code_signature.status, op: in, value: [apple, package] }
-        - { field: process.name, op: not_in, value: ["@shells_interp", "@downloaders", ssh, scp, sftp, rsync] }
+        - { field: process.code_signature.status, op: in, value: [apple, package, microsoft] }
+        - { field: process.name, op: not_in, value: ["@shells_interp", "@downloaders", "@lolbins", ssh, scp, sftp, rsync, ssh.exe, scp.exe, sftp.exe] }
+
+  - id: W1
+    name: lolbin_to_internet
+    points: 40
+    # Windows 標準のコマンドのうち悪用されやすいもの（rundll32・regsvr32・mshta・certutil 等）が
+    # インターネットへ自分から接続した。単独で通知に届く
+    description: 悪用されやすい Windows 標準のコマンド（rundll32・mshta・certutil 等）がインターネットへ接続
+    kinds: [connect]
+    when:
+      all:
+        - { field: process.name, op: in, value: "@lolbins", ci: true }
+        - { field: network.scope, op: eq, value: internet }
+
+  - id: W2
+    name: encoded_powershell
+    points: 30
+    # PowerShell の -EncodedCommand（中身を base64 で隠す）。管理ツールも使うので単独では notice（30）止まり
+    description: PowerShell が中身を隠した形（-EncodedCommand）で起動されて通信
+    kinds: [connect, listen]
+    when:
+      all:
+        - { field: process.name, op: in, value: [powershell.exe, pwsh.exe], ci: true }
+        # -EncodedCommand は前方の一部（-e・-ec・-enc 等）でも通る。/ で始める書き方もある
+        - { field: process.args, op: regex, value: '(?i)^[-/]e(c|n(c(o(d(e(d(c(o(m(m(a(n(d)?)?)?)?)?)?)?)?)?)?)?)?)?$' }
