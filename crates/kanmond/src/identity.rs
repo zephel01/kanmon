@@ -90,18 +90,32 @@ fn platform_identity(path: &str) -> Identity {
         Ok(o) => parse_codesign(&String::from_utf8_lossy(&o.stderr)),
         Err(_) => Identity { status: "unknown".into(), ..Default::default() },
     };
-    // 署名済みなら改ざんの有無を検証（失敗＝invalid）
-    if !matches!(id.status.as_str(), "unsigned" | "unknown") {
-        let ok = Command::new("/usr/bin/codesign")
-            .args(["--verify", "--strict", path])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if !ok {
+    // 署名済みなら改ざんの有無を検証（失敗＝invalid）。
+    // OS が封印して検証している領域（SSV・Cryptex）は対象外：書き換えには SIP の無効化が必要で、
+    // かつ Cryptex 内の Apple 純正バイナリは codesign --verify --strict が失敗することがある（誤検知）。
+    if !matches!(id.status.as_str(), "unsigned" | "unknown") && !os_sealed_path(path) {
+        let verify = |strict: bool| {
+            let mut c = Command::new("/usr/bin/codesign");
+            c.arg("--verify");
+            if strict {
+                c.arg("--strict");
+            }
+            c.arg(path).output().map(|o| o.status.success()).unwrap_or(false)
+        };
+        // --strict だけ失敗するもの（バンドル構造の細かい差）は改ざんとはみなさない
+        if !verify(true) && !verify(false) {
             id.status = "invalid".into();
         }
     }
     id
+}
+
+/// macOS が封印・検証している読み取り専用の領域（Signed System Volume・Cryptex）
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn os_sealed_path(path: &str) -> bool {
+    ["/System/", "/usr/bin/", "/usr/sbin/", "/usr/libexec/", "/usr/lib/", "/bin/", "/sbin/"]
+        .iter()
+        .any(|p| path.starts_with(p))
 }
 
 #[cfg(target_os = "linux")]
@@ -230,6 +244,15 @@ mod tests {
         let adhoc = "Identifier=updater\nCodeDirectory v=20400 size=200 flags=0x20002(adhoc,linker-signed)\nSignature=adhoc\nTeamIdentifier=not set\n";
         assert_eq!(parse_codesign(adhoc).status, "adhoc");
         assert_eq!(parse_codesign("/tmp/x: code object is not signed at all\n").status, "unsigned");
+    }
+
+    #[test]
+    fn sealed_paths() {
+        assert!(os_sealed_path("/System/Volumes/Preboot/Cryptexes/OS/System/Library/Frameworks/WebKit.framework/x"));
+        assert!(os_sealed_path("/usr/libexec/nsurlsessiond"));
+        assert!(!os_sealed_path("/usr/local/bin/x"));
+        assert!(!os_sealed_path("/Applications/Foo.app/Contents/MacOS/Foo"));
+        assert!(!os_sealed_path("/private/tmp/x"));
     }
 
     #[test]

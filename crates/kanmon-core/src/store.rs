@@ -186,6 +186,17 @@ impl Store {
         Ok(rows.collect::<std::result::Result<_, _>>()?)
     }
 
+    /// 同じ (proc_key, dest_key) の beacon_report が since 以降に記録済みか（再起動をまたいだ重複防止）
+    pub fn beacon_reported_since(&self, proc_key: &str, dest_key: &str, since: i64) -> Result<bool> {
+        let pat = format!("%\"dest_key\":{}%", serde_json::to_string(dest_key)?);
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE kind='beacon_report' AND proc_key=?1 AND ts>=?2 AND json LIKE ?3",
+            params![proc_key, since, pat],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
     /// 指定レベル以上の直近イベント（新しい順）。JSON をそのまま返す
     pub fn recent_events(&self, since: i64, levels: &[&str], limit: i64) -> Result<Vec<serde_json::Value>> {
         let placeholders = levels.iter().map(|_| "?").collect::<Vec<_>>().join(",");
@@ -252,6 +263,13 @@ mod tests {
         let r = s.recent_events(0, &["notice", "warn", "critical"], 10).unwrap();
         let ids: Vec<&str> = r.iter().map(|v| v["event"]["id"].as_str().unwrap()).collect();
         assert_eq!(ids, vec!["e3", "e2", "e1"], "新しい順・info は除く");
+        let b = serde_json::json!({"event": {"id": "b1"}, "network": {"kind": "beacon_report"},
+                                   "process": {"proc_key": "pk"}, "kanmon": {"dest_key": "203.0.113.0/24", "level": "notice"}});
+        s.insert_event(&b, 1000).unwrap();
+        assert!(s.beacon_reported_since("pk", "203.0.113.0/24", 900).unwrap());
+        assert!(!s.beacon_reported_since("pk", "203.0.113.0/24", 1001).unwrap());
+        assert!(!s.beacon_reported_since("pk", "198.51.100.0/24", 0).unwrap());
+        assert!(!s.beacon_reported_since("other", "203.0.113.0/24", 0).unwrap());
         assert_eq!(s.meta_get("k").unwrap().as_deref(), Some("v"));
     }
 }
