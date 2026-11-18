@@ -39,6 +39,26 @@ pub fn scan_npm(diffs: &[FileDiff]) -> Vec<Finding> {
             }
         }
     }
+    // 依存に、レジストリ以外（GitHub のコミット・URL・ファイル）から取るものが増えた。
+    // 2026 年の npm の乗っ取り（TanStack 等）は optionalDependencies に github:…#<コミット> を足し、本体をそこに置いた
+    for sect in ["dependencies", "optionalDependencies", "peerDependencies", "bundleDependencies"] {
+        let deps = |v: &serde_json::Value| v.get(sect).and_then(|x| x.as_object()).cloned().unwrap_or_default();
+        let (nd, od) = (deps(&new), deps(&old));
+        for (name, spec) in &nd {
+            let sp = spec.as_str().unwrap_or("");
+            if od.get(name) == Some(spec) {
+                continue;
+            }
+            let l = sp.to_ascii_lowercase();
+            if ["github:", "git+", "git://", "http://", "https://", "file:", "gitlab:", "bitbucket:"]
+                .iter()
+                .any(|p| l.starts_with(p))
+                || (sp.contains('/') && !sp.starts_with('@') && !sp.starts_with("npm:") && sp.contains('#'))
+            {
+                out.push(Finding::new("dep_from_url", "package.json", None, &format!("{sect}.{name}: {sp}")));
+            }
+        }
+    }
     for k in ["main", "exports", "bin", "module"] {
         let (n, o) = (str_at(&new, k), str_at(&old, k));
         if n.is_some() && n != o && pj.change == Change::Changed {
@@ -49,8 +69,20 @@ pub fn scan_npm(diffs: &[FileDiff]) -> Vec<Finding> {
     scan_new_root_scripts(diffs, Some(&new), &mut out)
 }
 
+/// binding.gyp のコマンド展開（`<!(…)`）は、npm install の node-gyp で実行される（scripts が無くても動く）
+fn gyp_exec(diffs: &[FileDiff], out: &mut Vec<Finding>) {
+    for d in diffs.iter().filter(|d| d.change != Change::Removed && d.path.ends_with("binding.gyp")) {
+        for (n, l) in added_lines(d) {
+            if l.contains("<!(") || l.contains("<!@(") {
+                out.push(Finding::new("install_script", &d.path, Some(n), &l));
+            }
+        }
+    }
+}
+
 /// ルート直下の新しい .js / .mjs / .cjs が scripts か main から参照されている
 fn scan_new_root_scripts(diffs: &[FileDiff], pj: Option<&serde_json::Value>, out: &mut Vec<Finding>) -> Vec<Finding> {
+    gyp_exec(diffs, out);
     let refs: String = pj
         .map(|v| {
             let mut s = String::new();
@@ -112,6 +144,11 @@ pub fn scan_pypi(diffs: &[FileDiff], base_paths: Option<&[String]>) -> Vec<Findi
             let text = String::from_utf8_lossy(d.new.as_deref().unwrap_or_default()).into_owned();
             for l in crate::persist::pth_exec_lines(&text) {
                 out.push(Finding::new("pth_exec", p, None, &l));
+                // .pth の 1 行にコードを詰めて、起動のたびに実行する（exec・eval・__import__）
+                let c: String = l.to_ascii_lowercase().chars().filter(|c| !c.is_whitespace()).collect();
+                if ["exec(", "eval(", "__import__(", "subprocess", "urllib"].iter().any(|k| c.contains(k)) {
+                    out.push(Finding::new("import_time_exec", p, None, &l));
+                }
             }
         }
         if name == "setup.py" && !p.contains('/') {
@@ -207,6 +244,18 @@ mod tests {
             feats(&scan_npm(&[fd("package.json", Change::Changed, Some(new), Some(&m))])),
             vec!["entry_changed"]
         );
+        // GitHub のコミットから取る依存が増えた
+        let g = new.replace(
+            r#""scripts""#,
+            r#""optionalDependencies":{"@x/setup":"github:x/y#79ac49eedf774dd4b0cfa308722bc463cfe5885c"},"scripts""#,
+        );
+        assert_eq!(feats(&scan_npm(&[fd("package.json", Change::Changed, Some(new), Some(&g))])), vec!["dep_from_url"]);
+        let ok = new.replace(r#""scripts""#, r#""dependencies":{"left-pad":"^1.3.0","@s/x":"npm:@s/y@1"},"scripts""#);
+        assert!(scan_npm(&[fd("package.json", Change::Changed, Some(new), Some(&ok))]).is_empty());
+        // binding.gyp のコマンド展開
+        let gyp =
+            r#"{"targets":[{"target_name":"S","sources":["<!(node index.js > /dev/null 2>&1 && echo stub.c)"]}]}"#;
+        assert_eq!(feats(&scan_npm(&[fd("binding.gyp", Change::Added, None, Some(gyp))])), vec!["install_script"]);
         // 読めない package.json
         assert_eq!(
             feats(&scan_npm(&[fd("package.json", Change::Changed, Some(new), Some("{"))])),
@@ -231,8 +280,17 @@ mod tests {
         let f = scan_pypi(&d, Some(&base));
         let fs = feats(&f);
         assert!(fs.contains(&"pth_exec"), "{f:?}");
+        assert!(!fs.contains(&"import_time_exec"), "import だけの .pth は import_time_exec にしない");
         assert_eq!(f.iter().filter(|x| x.feature == "new_top_level").count(), 1, "{f:?}");
         assert!(f.iter().any(|x| x.feature == "entry_changed" && x.line == Some(2)));
+        // 1 行にコードを詰めた .pth
+        let p2 = vec![fd(
+            "x-setup.pth",
+            Change::Added,
+            None,
+            Some("import os as _O;_O.path.exists(g) or exec('import subprocess')\n"),
+        )];
+        assert!(feats(&scan_pypi(&p2, None)).contains(&"import_time_exec"));
         // sdist の setup.py
         assert_eq!(
             feats(&scan_pypi(

