@@ -57,6 +57,8 @@ jobs:
           $j = $out | ConvertFrom-Json
           if (-not $j.results) { Write-Error "結果が無い：$out"; exit 1 }
           $j.results | Format-Table Area, Check, Status, Detail -AutoSize | Out-String -Width 200 | Write-Host
+          # CI の環境には Sysmon も kanmon も無いので NG（終了コード 2）になる。例外で止まらず結果が出れば合格
+          exit 0
       - name: 配布物の zip を作れるか
         shell: pwsh
         run: ./.github/scripts/package-windows.ps1 -Version ci
