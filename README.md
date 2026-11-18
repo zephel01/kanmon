@@ -41,7 +41,7 @@ kanmon は端末から出入りする通信を 1 本ずつ調べて、次の 2 �
 - 🔒 **自分の身も守る**：root 所有でないルールは読みません。通知は引数で渡すので注入できません。外部の死活監視とも連携できます
 
 ## クイックスタート
-Rust 1.88 以上が必要です。
+Rust 1.88 以上が必要です。Linux では libpcap の開発用ファイルも必要です（Ubuntu：`sudo apt install libpcap-dev`）。
 
 **macOS**
 ```bash
@@ -103,7 +103,7 @@ detections:
         - { field: process.parent_chain, op: in, value: [npm, pip, pip3, uv, cargo] }
         - { field: process.name, op: in, value: [sh, bash, curl, wget] }
 ```
-同梱ルールは 30 件です。一般的な手口（S1〜S18）と、開発者を狙う手口（D1〜D8：遠隔操作ソフト、トンネル、開発サーバーの公開、パッケージ導入時の通信など）を含みます。書き方と、ルールから参照できるフィールドは [docs/detections.md](docs/detections.md) にあります。
+同梱ルールは 45 件です。一般的な手口（S1〜S18）、開発者を狙う手口（D1〜D11：遠隔操作ソフト、トンネル、開発サーバーの公開、パッケージ導入時の通信、持ち出し先のサービス、AI CLI の非公式な宛先など）、DNS の改ざん（N1〜N6：hosts の書き換え、DNS サーバーの変更、DoH での照合など）を含みます。書き方と、ルールから参照できるフィールドは [docs/detections.md](docs/detections.md) にあります。
 
 ## ドキュメント
 | 文書 | 内容 |
@@ -118,13 +118,13 @@ detections:
 - [x] macOS メニューバーアプリ（Kanmon.app）と状態ソケット
 - [ ] Linux での遮断（eBPF + NFQUEUE、拒否マップのピン留め、フェイルオープン/クローズの切替）
 - [ ] macOS での遮断（Network Extension、実行中プロセスの署名検証）
-- [ ] DNS の強化（ドメイン名の付与、DoH 迂回の検知）
+- [x] 宛先のドメイン名（DNS 応答・SNI の受け身の観測）と DNS の改ざん検知（hosts・DNS サーバー設定・DoH での照合）
 - [ ] 送信量の急増検知、新規登録ドメイン（NRD）フィード
 - [ ] Web UI、syslog / SIEM 連携
 
 ## 既知の限界（v0.1）
 - **ポーリング方式**なので、収集間隔（既定 500ms）より短い接続は取りこぼすことがあります
-- 宛先は IP だけで、**ドメイン名は付きません**。ドメインを使うルールは replay と、将来の DNS 強化で効きます
+- ドメイン名は DNS 応答と SNI から付けるので、**名前が分からない接続**があります（QUIC、ECH で SNI が隠れた接続、kanmon の起動前に引かれた名前、DNS over HTTPS を自前で使うアプリ）
 - root を取られた後は止められてしまいます。`heartbeat_url` で外側から死活を監視してください
 - コンテナや別の network namespace の通信は対象外です
 

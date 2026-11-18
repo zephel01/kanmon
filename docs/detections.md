@@ -54,7 +54,7 @@ detections:
 ## 参照できるフィールド
 | フィールド | 内容 |
 |---|---|
-| `network.kind` / `direction` / `transport` / `scope` | 種別、方向、tcp / udp / raw / packet、loopback / lan / internet / all |
+| `network.kind` / `direction` / `transport` / `scope` | 種別（connect / accept / listen / raw_socket / beacon_report / dns_integrity）、方向、tcp / udp / raw / packet / dns、loopback / lan / internet / all |
 | `process.executable` / `name` / `args` / `user` / `uid` | 実行ファイル、引数、ユーザー |
 | `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / adhoc / unsigned / package / unmanaged / unknown |
 | `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
@@ -62,7 +62,13 @@ detections:
 | `process.parent.name` / `parent_chain` | 親プロセス、親から上へ最大 6 段の実行ファイル名。インタプリタはスクリプト名も入る（`node …/npm-cli.js` → `node`・`npm-cli.js`、`python -m pip` → `pip`） |
 | `process.exe_deleted` / `memfd` / `hidden` / `interpreter` / `script` | 削除済み、メモリ上（memfd）、隠しファイル、インタプリタとスクリプト |
 | `process.file_age_s` / `first_seen_age_s` | 実行ファイルの更新からの秒数、kanmon が初めて見てからの秒数 |
-| `source.ip` / `port`、`destination.ip` / `port` / `domain` / `registered_domain` | 端点（v0.1 では `domain` は空） |
+| `source.ip` / `port`、`destination.ip` / `port` / `domain` / `registered_domain` | 端点。`domain` は DNS 応答・TLS の SNI を受け身で読んで付ける（v0.2 以降。名前が分からない接続では空） |
+| `destination.domain_source` | 名前の出どころ：`sni`（その接続の TLS ClientHello）/ `dns`（DNS 応答で引かれた名前）/ `sni_ip`（同じ IP への別の接続の SNI） |
+| `dns.question.name` / `dns.resolved_ip` | DNS の問い合わせ名と答え（`dns_integrity` のみ） |
+| `file.path` | 対象のファイル（hosts の書き換え） |
+| `kanmon.dns.finding` | DNS の改ざん検知の種類：`hosts_changed` / `resolver_changed` / `crosscheck_mismatch` / `private_answer` / `conflicting_answer` / `unexpected_resolver` |
+| `kanmon.dns.watched` / `redirected` / `unknown_public` | 監視リストのドメインが関わる / hosts で他所へ向けられている / 見慣れない公開 DNS |
+| `kanmon.dns.added` / `removed` / `added_scope` / `server` / `other` | 追加・削除された行や DNS サーバー、追加先の範囲、応答した DNS サーバー、比較相手の答え |
 | `kanmon.ti_match` / `ti_source` | 脅威インテルに一致したか、どのリストか |
 | `kanmon.dest_first_for_process` / `port_first_for_process` / `listen_new` | ベースラインとの差分（学習期間中は常に false） |
 | `kanmon.dga_score` | 自動生成ドメインらしさ（0〜1、ドメインがあるときだけ） |
@@ -91,10 +97,27 @@ detections:
 | D1 | 遠隔操作ソフト（AnyDesk・TeamViewer・RustDesk 等）が通信。サポート詐欺で悪用が多い | +40 |
 | D2 / D2s | トンネルツール（ngrok・cloudflared・chisel 等）/ SSH のリバーストンネル（`-R`） | +25 / +30 |
 | D3 / D3d | 開発・AI サーバー（LiteLLM・Ollama・Jupyter・DB 等）/ デバッガのポートを外部に公開 | +30 / +60 |
-| D4 / D4p | パッケージ導入処理（npm・pip・cargo・makepkg 等）の配下から外部へ通信 / 非標準ポートへ通信 | +30 / +20 |
+| D4 / D4p | パッケージ導入処理（npm・pip・cargo・makepkg 等）の配下から外部へ通信（宛先が公式の配布元と分かれば対象外）/ 非標準ポートへ通信 | +30 / +20 |
 | D5 | スクリプト（node・python 等）がインターネットの非標準ポートへ通信 | +15 |
 | D6 | AppleScript（osascript）またはその配下が通信（AMOS 等の情報窃取） | +40 |
 | D7 | マイニングプールでよく使われるポートへ通信 | +30 |
 | D8 | Telegram 以外のプロセスが Telegram のサーバーへ通信（盗んだ情報の送り先） | +40 |
+| D9 | ブラウザ以外が、ペーストサイト・Webhook 受け口など盗んだ情報の置き場に使われやすいサービスへ通信 | +30 |
+| D10 | パッケージ導入処理の配下から GitHub の書き込み口（API・Gist）へ通信 | +20 |
+| D11 | AI コーディング CLI（claude・codex・grok 等）が公式以外の宛先へ通信 | +30 |
+
+### DNS の改ざん検知（`25-dns.yaml`）
+イベントの `network.kind` は `dns_integrity`。hosts と DNS サーバー設定は読むだけで、書き換えません。
+
+| ID | 内容 | 点 |
+|---|---|---|
+| N1 / N1w / N1r | hosts が書き換えられた / 監視リストのドメインが含まれる / それが別のサーバーへ向けられている | +30 / +40 / +60 |
+| N2 / N2p | DNS サーバーの設定が変わった（Wi-Fi の切り替えでも起きる）/ 見慣れない公開 DNS が設定された | +10 / +50 |
+| N3 | 監視リストのドメインの答えが、暗号化 DNS（DoH）で引き直した答えと /24 でも重ならない | +40 |
+| N4 / N4w | 公開ドメインがループバック・社内の IP に解決された / それが監視リストのドメイン | +30 / +30 |
+| N5 / N5w | 同じ問い合わせに中身の違う応答が届いた / それが監視リストのドメイン | +40 / +30 |
+| N6 / N6u | 設定にない DNS サーバーから応答 / それがよく使われる公開 DNS でもない | +20 / +20 |
+
+監視リスト（`dns.watch_domains`）の既定値は、パッケージ配布元（npm・PyPI・crates.io 等）、GitHub、Hugging Face、AI ベンダーの API、主要なログイン画面です。
 
 検知ルールを変えたら、`tests/fixtures/replay-cases.jsonl` に期待値を足してください。`cargo test` が回帰を検出します。

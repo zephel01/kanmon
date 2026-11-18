@@ -33,12 +33,85 @@ fn kind_label(kind: &str) -> &str {
         "listen" => "待受",
         "raw_socket" => "raw ソケット",
         "beacon_report" => "周期通信（ビーコン）",
+        "dns_integrity" => "DNS の改ざん検知",
         _ => kind,
     }
 }
 
+fn finding_label(f: &str) -> &str {
+    match f {
+        "hosts_changed" => "hosts が書き換えられた",
+        "resolver_changed" => "DNS サーバーの設定が変わった",
+        "crosscheck_mismatch" => "暗号化 DNS で引き直した答えと合わない",
+        "private_answer" => "公開ドメインがローカルの IP に解決された",
+        "conflicting_answer" => "同じ問い合わせに違う応答が届いた",
+        "unexpected_resolver" => "設定にない DNS サーバーから応答",
+        _ => f,
+    }
+}
+
+fn strs(v: &Value, p: &str) -> Vec<String> {
+    get_path(v, p)
+        .and_then(|x| x.as_array())
+        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
+/// DNS の改ざん検知イベントの文面
+fn dns_text(v: &Value, level: &str, score: i64) -> (String, String) {
+    let f = s(v, "kanmon.dns.finding").unwrap_or("?");
+    let subject = s(v, "dns.question.name").or_else(|| s(v, "file.path")).unwrap_or("");
+    let title =
+        format!("kanmon {} {}点: {} {}", level.to_uppercase(), score, finding_label(f), subject).trim_end().to_string();
+    let mut lines = vec![format!("【理由】合計 {score} 点（{level}）")];
+    if let Some(sigs) = get_path(v, "kanmon.signals").and_then(|x| x.as_array()) {
+        for h in sigs {
+            let desc = h["description"].as_str().filter(|d| !d.is_empty()).or(h["name"].as_str()).unwrap_or("?");
+            lines.push(format!("・{desc}（{:+}）", h["points"].as_i64().unwrap_or(0)));
+        }
+    }
+    lines.push(String::new());
+    lines.push(format!("【内容】{}", finding_label(f)));
+    if let Some(p) = s(v, "file.path") {
+        lines.push(format!("  ファイル: {p}"));
+    }
+    if let Some(q) = s(v, "dns.question.name") {
+        lines.push(format!("  名前: {q}"));
+    }
+    let ips = strs(v, "dns.resolved_ip");
+    if !ips.is_empty() {
+        lines.push(format!("  答え: {}", ips.join(", ")));
+    }
+    let other = strs(v, "kanmon.dns.other");
+    if !other.is_empty() {
+        let label = if f == "crosscheck_mismatch" { "暗号化 DNS の答え" } else { "もう一方の答え" };
+        lines.push(format!("  {label}: {}", other.join(", ")));
+    }
+    if let Some(sv) = s(v, "kanmon.dns.server") {
+        lines.push(format!("  DNS サーバー: {sv}"));
+    }
+    for (k, label) in [("kanmon.dns.added", "追加"), ("kanmon.dns.removed", "削除")] {
+        let a = strs(v, k);
+        for x in a.iter().take(10) {
+            lines.push(format!("  {label}: {x}"));
+        }
+        if a.len() > 10 {
+            lines.push(format!("  {label}: ほか {} 件", a.len() - 10));
+        }
+    }
+    if let Some(ts) = s(v, "@timestamp") {
+        lines.push(format!("【時刻】{ts}  id {}", s(v, "event.id").unwrap_or("?")));
+    }
+    (title, lines.join("\n"))
+}
+
 /// (タイトル, 本文) を返す。タイトルは 1 行、本文は複数行。
 pub fn alert_text(v: &Value) -> (String, String) {
+    if s(v, "network.kind") == Some("dns_integrity") {
+        let level = s(v, "kanmon.level").unwrap_or("info");
+        let score = get_path(v, "kanmon.score").and_then(|x| x.as_i64()).unwrap_or(0);
+        return dns_text(v, level, score);
+    }
     let level = s(v, "kanmon.level").unwrap_or("info");
     let score = get_path(v, "kanmon.score").and_then(|x| x.as_i64()).unwrap_or(0);
     let kind = s(v, "network.kind").unwrap_or("");
@@ -164,5 +237,16 @@ mod tests {
         let v6 = json!({"network": {"kind": "connect"}, "destination": {"ip": "2001:db8::1", "port": 443},
                         "kanmon": {"level": "notice", "score": 30}});
         assert!(alert_text(&v6).0.ends_with("[2001:db8::1]:443"));
+    }
+
+    #[test]
+    fn dns_integrity_text() {
+        let v = json!({"network": {"kind": "dns_integrity"}, "file": {"path": "/etc/hosts"},
+                       "kanmon": {"level": "critical", "score": 140,
+                                  "dns": {"finding": "hosts_changed", "redirected": true,
+                                          "added": ["203.0.113.66 registry.npmjs.org"]}}});
+        let (t, b) = alert_text(&v);
+        assert_eq!(t, "kanmon CRITICAL 140点: hosts が書き換えられた /etc/hosts");
+        assert!(b.contains("追加: 203.0.113.66 registry.npmjs.org"), "{b}");
     }
 }

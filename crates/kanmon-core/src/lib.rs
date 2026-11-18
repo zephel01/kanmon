@@ -8,15 +8,18 @@
 pub mod beacon;
 pub mod detect;
 pub mod dga;
+pub mod dnsguard;
 pub mod event;
 pub mod format;
 pub mod intel;
 pub mod jsonl;
+pub mod names;
 pub mod netclass;
 pub mod rules;
 pub mod scoring;
 #[cfg(feature = "sqlite")]
 pub mod store;
+pub mod wire;
 
 pub use detect::{DetectionSet, SignalHit};
 pub use scoring::Level;

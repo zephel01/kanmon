@@ -1,5 +1,6 @@
 //! 監視ループ本体：スナップショット差分 → 識別 → 事実（facts）付与 → 検知ルール評価 → 保存・通知。
 
+use crate::capture::Obs;
 use crate::config::Config;
 use crate::identity::{self, IdCache};
 use crate::notify::{self, Message, Notifier};
@@ -9,9 +10,11 @@ use crate::status::{AlertItem, Shared, Snapshot};
 use anyhow::{Context, Result};
 use chrono::{Local, SecondsFormat, Utc};
 use kanmon_core::detect::{DetectionSet, Reloader};
+use kanmon_core::dnsguard::{self, ConflictTracker};
 use kanmon_core::event::{self as ev, Event};
 use kanmon_core::intel::Intel;
 use kanmon_core::jsonl::JsonlWriter;
+use kanmon_core::names::NameCache;
 use kanmon_core::rules::RuleSet;
 use kanmon_core::scoring::{self, Level};
 use kanmon_core::store::{ProcRow, Store};
@@ -20,6 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -54,8 +58,25 @@ pub struct Monitor {
     self_pid: u32,
     shared: Arc<Shared>,
     last_counts: Instant,
+    // ---- 宛先の名前付けと DNS の改ざん検知
+    names: NameCache,
+    obs_rx: Option<Receiver<Obs>>,
+    conflicts: ConflictTracker,
+    known_resolvers: Vec<std::net::IpAddr>,
+    last_dns_check: Option<Instant>,
+    doh_tx: Sender<DohResult>,
+    doh_rx: Receiver<DohResult>,
+    /// ドメイン → （最後に DoH で引いた時刻, DoH で見た IP の履歴）
+    doh_state: HashMap<String, (Instant, Vec<std::net::IpAddr>)>,
+    doh_inflight: HashSet<String>,
+    doh_fail_logged: Option<Instant>,
+    /// 同じ検知を何度も出さないための最終発報時刻
+    dns_emitted: HashMap<String, i64>,
     pub print: bool,
 }
+
+/// （ドメイン, 受け身で見た答え, DoH の答え）
+type DohResult = (String, Vec<std::net::IpAddr>, std::result::Result<Vec<std::net::IpAddr>, String>);
 
 fn hostname() -> String {
     let mut buf = [0u8; 256];
@@ -132,6 +153,20 @@ impl Monitor {
         }
         let notifier = Notifier::new(&cfg.notify, Some(shared.clone()));
         let rules_mtime = std::fs::metadata(&cfg.rules_file).and_then(|m| m.modified()).ok();
+        let obs_rx = if cfg.dns.enabled {
+            let (tx, rx) = std::sync::mpsc::sync_channel(10_000);
+            let devs = crate::capture::start(cfg.dns.interfaces.clone(), tx);
+            if devs.is_empty() {
+                eprintln!("kanmond: DNS・SNI の観測を開始できませんでした（宛先は IP のみ）");
+            } else {
+                eprintln!("kanmond: DNS・SNI の観測: {}", devs.join(", "));
+            }
+            Some(rx)
+        } else {
+            None
+        };
+        let known_resolvers = crate::dnswatch::read_resolvers(&cfg.dns.resolv_conf);
+        let (doh_tx, doh_rx) = std::sync::mpsc::channel();
         Ok(Self {
             host,
             os,
@@ -160,6 +195,17 @@ impl Monitor {
             self_pid: std::process::id(),
             shared,
             last_counts: Instant::now() - Duration::from_secs(3600),
+            names: NameCache::default(),
+            obs_rx,
+            conflicts: ConflictTracker::default(),
+            known_resolvers,
+            last_dns_check: None,
+            doh_tx,
+            doh_rx,
+            doh_state: HashMap::new(),
+            doh_inflight: HashSet::new(),
+            doh_fail_logged: None,
+            dns_emitted: HashMap::new(),
             print: false,
             cfg,
         })
@@ -193,6 +239,8 @@ impl Monitor {
     }
 
     pub fn tick(&mut self) -> Result<usize> {
+        // 先に DNS・SNI の観測を取り込んでから、新しい接続に名前を付ける
+        self.drain_obs();
         let socks = self.collector.snapshot()?;
         let listens = listen_ports(&socks);
         let mut cur = HashSet::with_capacity(socks.len());
@@ -285,9 +333,21 @@ impl Monitor {
             let url = hb.clone();
             std::thread::spawn(move || notify::heartbeat(&url));
         }
+        // DNS の改ざん検知（hosts・DNS サーバー設定、DoH の結果）
+        if self.cfg.dns.enabled {
+            if self
+                .last_dns_check
+                .is_none_or(|t| t.elapsed() > Duration::from_secs(self.cfg.dns.check_interval_s.max(5)))
+            {
+                self.last_dns_check = Some(Instant::now());
+                self.dns_check();
+            }
+            self.drain_doh();
+        }
         // 状態ソケット用の集計（1 分ごと）
         if self.last_counts.elapsed() > Duration::from_secs(60) {
             self.last_counts = Instant::now();
+            self.names.prune(Utc::now().timestamp());
             let since = Utc::now().timestamp() - 86_400;
             let counts = self.store.level_counts(since).unwrap_or_default();
             let learning = self.learning();
@@ -370,6 +430,13 @@ impl Monitor {
         };
         e.kanmon.mode = if learning { "learning".into() } else { self.cfg.mode.clone() };
         e.kanmon.learning = learning;
+        // 宛先の名前（DNS 応答・SNI から）
+        if let (Some(r), Some(d)) = (s.remote, e.destination.as_mut()) {
+            if let Some(n) = self.names.lookup(Some(s.local), r, now_s) {
+                d.domain = Some(n.name);
+                d.domain_source = Some(n.source.into());
+            }
+        }
 
         // ---- プロセス
         let mut proc_key = String::from("unknown");
@@ -449,6 +516,13 @@ impl Monitor {
                 e.kanmon.ti_source = Some(src.to_string());
             }
         }
+        if !e.kanmon.ti_match {
+            let dom = e.destination.as_ref().and_then(|d| d.domain.clone());
+            if let Some(src) = dom.as_deref().and_then(|d| self.intel.lookup_domain(d)) {
+                e.kanmon.ti_match = true;
+                e.kanmon.ti_source = Some(src.to_string());
+            }
+        }
         let dest_key = netclass::dest_key(None, remote_ip.as_ref());
         e.kanmon.dest_key = dest_key.clone();
         match kind {
@@ -510,6 +584,276 @@ impl Monitor {
             title: title.into(),
             body: body.into(),
         });
+    }
+
+    /// キャプチャスレッドからの観測を取り込む
+    fn drain_obs(&mut self) {
+        let mut items = vec![];
+        if let Some(rx) = &self.obs_rx {
+            while let Ok(o) = rx.try_recv() {
+                items.push(o);
+                if items.len() >= 20_000 {
+                    break;
+                }
+            }
+        }
+        let now = Utc::now().timestamp();
+        for o in items {
+            match o {
+                Obs::Sni { local, remote, hello } => {
+                    if let Some(n) = hello.sni {
+                        self.names.insert_sni(local, remote, &n, now);
+                    }
+                }
+                Obs::Dns { server, client, client_port, msg } => self.on_dns(server, client, client_port, &msg, now),
+            }
+        }
+    }
+
+    fn on_dns(
+        &mut self,
+        server: IpAddr,
+        client: IpAddr,
+        client_port: u16,
+        msg: &kanmon_core::wire::DnsMessage,
+        now: i64,
+    ) {
+        let Some(q) = msg.qname.clone() else { return };
+        if msg.rcode != 0 {
+            return;
+        }
+        let ips = msg.addresses();
+        if ips.is_empty() {
+            return;
+        }
+        let ttl = msg.min_ttl().unwrap_or(60);
+        for ip in &ips {
+            self.names.insert_dns(*ip, &q, ttl, now);
+        }
+        let watched = dnsguard::watched(&q, &self.cfg.dns.watch_domains);
+        // N5：同じ問い合わせに中身の違う応答
+        if let Some((prev, cur)) = self.conflicts.observe(server, client, client_port, msg.id, &q, &ips, now) {
+            let facts = ev::DnsFacts {
+                finding: "conflicting_answer".into(),
+                watched,
+                server: Some(server.to_string()),
+                other: prev.iter().map(|x| x.to_string()).collect(),
+                ..Default::default()
+            };
+            self.emit_dns(facts, Some(q.clone()), &cur, None, format!("conflict|{q}"));
+        }
+        // N4：公開ドメインがローカルの IP に解決
+        let local_ips = dnsguard::private_answers(&q, &ips, &self.cfg.dns.private_ok_suffixes);
+        if !local_ips.is_empty() {
+            let facts = ev::DnsFacts {
+                finding: "private_answer".into(),
+                watched,
+                server: Some(server.to_string()),
+                ..Default::default()
+            };
+            self.emit_dns(facts, Some(q.clone()), &local_ips, None, format!("private|{q}"));
+        }
+        // N6：設定にない DNS サーバーからの応答
+        if dnsguard::unexpected_resolver(&server, &self.known_resolvers) {
+            let facts = ev::DnsFacts {
+                finding: "unexpected_resolver".into(),
+                watched,
+                unknown_public: !dnsguard::known_public(&server),
+                server: Some(server.to_string()),
+                ..Default::default()
+            };
+            self.emit_dns(facts, Some(q.clone()), &ips, None, format!("resolver|{server}"));
+        }
+        // N3：監視リストのドメインは DoH で引き直して照合
+        if watched && self.cfg.dns.crosscheck {
+            self.schedule_doh(q, ips);
+        }
+    }
+
+    fn schedule_doh(&mut self, name: String, passive: Vec<IpAddr>) {
+        if self.doh_inflight.contains(&name) || self.doh_inflight.len() >= 4 {
+            return;
+        }
+        if let Some((t, hist)) = self.doh_state.get(&name) {
+            let recent = t.elapsed() < Duration::from_secs(self.cfg.dns.crosscheck_interval_min.max(1) * 60);
+            // 間隔内で、これまでの DoH の答えと食い違わなければ引き直さない
+            if recent && !dnsguard::crosscheck_mismatch(&passive, hist, &[]) {
+                return;
+            }
+            if t.elapsed() < Duration::from_secs(60) {
+                return;
+            }
+        }
+        self.doh_inflight.insert(name.clone());
+        let url = self.cfg.dns.doh_url.clone();
+        let tx = self.doh_tx.clone();
+        let spawned = std::thread::Builder::new().name("kanmon-doh".into()).spawn(move || {
+            let r = crate::dnswatch::doh_lookup(&url, &name).map_err(|e| format!("{e:#}"));
+            let _ = tx.send((name, passive, r));
+        });
+        if spawned.is_err() {
+            eprintln!("kanmond: DoH のスレッドを作れません");
+        }
+    }
+
+    fn drain_doh(&mut self) {
+        let mut done = vec![];
+        while let Ok(r) = self.doh_rx.try_recv() {
+            done.push(r);
+        }
+        for (name, passive, res) in done {
+            self.doh_inflight.remove(&name);
+            match res {
+                Ok(doh) => {
+                    let hist = self.doh_state.get(&name).map(|(_, h)| h.clone()).unwrap_or_default();
+                    let mismatch = dnsguard::crosscheck_mismatch(&passive, &doh, &hist);
+                    let mut h = hist;
+                    for ip in &doh {
+                        if !h.contains(ip) {
+                            h.push(*ip);
+                        }
+                    }
+                    let keep = h.len().saturating_sub(64);
+                    h.drain(..keep);
+                    self.doh_state.insert(name.clone(), (Instant::now(), h));
+                    if mismatch {
+                        let facts = ev::DnsFacts {
+                            finding: "crosscheck_mismatch".into(),
+                            watched: true,
+                            other: doh.iter().map(|x| x.to_string()).collect(),
+                            ..Default::default()
+                        };
+                        self.emit_dns(facts, Some(name.clone()), &passive, None, format!("crosscheck|{name}"));
+                    }
+                }
+                Err(e) => {
+                    if self.doh_fail_logged.is_none_or(|t| t.elapsed() > Duration::from_secs(3600)) {
+                        self.doh_fail_logged = Some(Instant::now());
+                        eprintln!("kanmond: DoH での照合に失敗（{name}）: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// hosts と DNS サーバー設定を前回と比べる（N1・N2）
+    fn dns_check(&mut self) {
+        let watch = self.cfg.dns.watch_domains.clone();
+        // ---- N1 hosts
+        let path = self.cfg.dns.hosts_path.clone();
+        if let Ok(text) = std::fs::read(&path) {
+            let text = String::from_utf8_lossy(&text[..text.len().min(1 << 20)]).into_owned();
+            let old = self.store.meta_get("dns.hosts").ok().flatten();
+            let r = dnsguard::hosts_check(old.as_deref(), &text, &watch);
+            let first = old.is_none();
+            let (added, redirected) = if first {
+                // 初回：前の内容が無いので、監視リストのドメインを他所へ向けている行だけを知らせる
+                (r.redirected.clone(), !r.redirected.is_empty())
+            } else {
+                let red = r.added.iter().any(|l| r.redirected.contains(l));
+                (r.added.clone(), red)
+            };
+            if (first && redirected) || (!first && r.changed()) {
+                let watched = added
+                    .iter()
+                    .chain(r.removed.iter())
+                    .any(|l| l.split_whitespace().nth(1).is_some_and(|n| dnsguard::watched(n, &watch)));
+                let facts = ev::DnsFacts {
+                    finding: "hosts_changed".into(),
+                    watched,
+                    redirected,
+                    added,
+                    removed: if first { vec![] } else { r.removed.clone() },
+                    ..Default::default()
+                };
+                let key = format!("hosts|{}", text.len());
+                self.emit_dns(facts, None, &[], Some(path.display().to_string()), key);
+            }
+            if first || r.changed() {
+                let _ = self.store.meta_set("dns.hosts", &text);
+            }
+        }
+        // ---- N2 DNS サーバー設定
+        let new = crate::dnswatch::read_resolvers(&self.cfg.dns.resolv_conf);
+        let old_s = self.store.meta_get("dns.resolvers").ok().flatten();
+        let new_s = new.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
+        if let Some(old_s) = &old_s {
+            let old: Vec<IpAddr> = old_s.split(',').filter_map(|x| x.parse().ok()).collect();
+            if let Some(c) = dnsguard::resolver_change(&old, &new) {
+                let facts = ev::DnsFacts {
+                    finding: "resolver_changed".into(),
+                    added: c.added.iter().map(|x| x.to_string()).collect(),
+                    removed: c.removed.iter().map(|x| x.to_string()).collect(),
+                    added_scope: Some(c.added_scope.into()),
+                    unknown_public: !c.unknown_public.is_empty(),
+                    ..Default::default()
+                };
+                self.emit_dns(facts, None, &[], None, format!("resolvers|{new_s}"));
+            }
+        }
+        if old_s.as_deref() != Some(new_s.as_str()) {
+            let _ = self.store.meta_set("dns.resolvers", &new_s);
+        }
+        if !new.is_empty() {
+            self.known_resolvers = new;
+        }
+    }
+
+    /// DNS の改ざん検知イベントを作って評価・保存・通知する（同じ内容は 1 時間に 1 回）
+    fn emit_dns(
+        &mut self,
+        facts: ev::DnsFacts,
+        question: Option<String>,
+        resolved: &[IpAddr],
+        file: Option<String>,
+        dedup: String,
+    ) {
+        let now = Utc::now().timestamp();
+        if self.dns_emitted.get(&dedup).is_some_and(|t| now - *t < 3600) {
+            return;
+        }
+        if self.dns_emitted.len() > 10_000 {
+            self.dns_emitted.retain(|_, t| now - *t < 3600);
+        }
+        self.dns_emitted.insert(dedup.clone(), now);
+        let learning = self.learning();
+        let mut e = Event {
+            timestamp: Local::now().to_rfc3339_opts(SecondsFormat::Millis, false),
+            event: ev::EventMeta {
+                id: self.next_id(),
+                kind: "alert".into(),
+                action: facts.finding.clone(),
+                outcome: None,
+            },
+            host: ev::Host { name: self.host.clone(), os: self.os.into() },
+            network: ev::Network {
+                kind: "dns_integrity".into(),
+                direction: "none".into(),
+                transport: "dns".into(),
+                scope: None,
+            },
+            dns: (question.is_some() || !resolved.is_empty()).then(|| ev::Dns {
+                question: question.map(|name| ev::DnsQuestion { name }),
+                resolved_ip: resolved.iter().map(|x| x.to_string()).collect(),
+            }),
+            file: file.map(|path| ev::File { path }),
+            ..Default::default()
+        };
+        e.kanmon.mode = if learning { "learning".into() } else { self.cfg.mode.clone() };
+        e.kanmon.learning = learning;
+        e.kanmon.dns = Some(facts);
+        let Ok(mut v) = serde_json::to_value(&e) else { return };
+        let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);
+        if let Err(err) = self.store.insert_event(&v, now).and_then(|_| self.jsonl.write(&v)) {
+            eprintln!("kanmond: DNS 検知イベントの保存に失敗: {err:#}");
+        }
+        if self.print {
+            println!("{}", serde_json::to_string(&v).unwrap_or_default());
+        }
+        let (title, body) = kanmon_core::format::alert_text(&v);
+        self.record_alert(&v, out.level, out.score, "dns_integrity", &title, &body);
+        let min = self.min_notify_level();
+        self.notifier.send(Message { level: out.level, title, body, dedup_key: format!("dns|{dedup}") }, min);
     }
 
     /// 直近 24h の接続開始時刻からビーコン候補を出す（判定経路には載せない）

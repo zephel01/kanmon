@@ -39,6 +39,72 @@ pub struct Config {
     pub status_socket: String,
     /// 状態ソケットへの接続を追加で許す uid（root とログイン中のユーザーは常に可）
     pub status_allowed_uids: Vec<u32>,
+    /// 宛先の名前付け（DNS・SNI の受け身の観測）と DNS の改ざん検知
+    pub dns: DnsCfg,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DnsCfg {
+    /// DNS 応答と TLS の SNI を受け身で読み、宛先 IP にドメイン名を付ける（設定は変えない）
+    pub enabled: bool,
+    /// 読むインターフェース。空なら自動（Linux は any、macOS は稼働中の全インターフェース）
+    pub interfaces: Vec<String>,
+    pub hosts_path: PathBuf,
+    /// Linux で DNS サーバーを読むファイル（macOS は `scutil --dns`）
+    pub resolv_conf: Vec<PathBuf>,
+    /// hosts・DNS サーバー設定を確かめる間隔（秒）
+    pub check_interval_s: u64,
+    /// 監視リストのドメインを暗号化 DNS（DoH）で引き直して照合する
+    pub crosscheck: bool,
+    /// DoH の URL（https のみ。JSON 形式に対応したもの）
+    pub doh_url: String,
+    /// 同じドメインを引き直す間隔（分）
+    pub crosscheck_interval_min: u64,
+    /// 書き換えや食い違いを特に重く見るドメイン（サブドメインも含む）
+    pub watch_domains: Vec<String>,
+    /// プライベート IP に解決されても知らせない接尾辞（社内ドメイン等）
+    pub private_ok_suffixes: Vec<String>,
+}
+
+impl Default for DnsCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interfaces: vec![],
+            hosts_path: "/etc/hosts".into(),
+            resolv_conf: vec!["/etc/resolv.conf".into(), "/run/systemd/resolve/resolv.conf".into()],
+            check_interval_s: 60,
+            crosscheck: true,
+            doh_url: "https://cloudflare-dns.com/dns-query".into(),
+            crosscheck_interval_min: 30,
+            watch_domains: [
+                "registry.npmjs.org",
+                "registry.yarnpkg.com",
+                "pypi.org",
+                "files.pythonhosted.org",
+                "crates.io",
+                "static.crates.io",
+                "index.crates.io",
+                "rubygems.org",
+                "proxy.golang.org",
+                "github.com",
+                "githubusercontent.com",
+                "ghcr.io",
+                "huggingface.co",
+                "api.anthropic.com",
+                "api.openai.com",
+                "accounts.google.com",
+                "login.microsoftonline.com",
+                "apple.com",
+                "icloud.com",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            private_ok_suffixes: vec![],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -186,6 +252,7 @@ impl Default for Config {
                 "/run/kanmon/kanmond.sock".into()
             },
             status_allowed_uids: vec![],
+            dns: DnsCfg::default(),
         }
     }
 }
@@ -196,6 +263,9 @@ impl Config {
             Some(p) => {
                 let t = std::fs::read_to_string(p).with_context(|| format!("read {}", p.display()))?;
                 let c: Config = toml::from_str(&t).with_context(|| format!("parse {}", p.display()))?;
+                if c.dns.crosscheck && !c.dns.doh_url.starts_with("https://") {
+                    anyhow::bail!("dns.doh_url は https:// で始めてください");
+                }
                 Ok(c)
             }
             None => Ok(Config::default()),

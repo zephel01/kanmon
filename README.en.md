@@ -43,7 +43,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 - 🔒 **Hardened**: refuses rule files that are not owned by root, passes notification text as arguments so it cannot be injected, and supports an external dead-man heartbeat
 
 ## Quick start
-Requires Rust 1.88 or later.
+Requires Rust 1.88 or later. On Linux you also need the libpcap headers (Ubuntu: `sudo apt install libpcap-dev`).
 
 ```bash
 git clone https://github.com/zephel01/kanmon.git && cd kanmon
@@ -92,20 +92,20 @@ detections:
         - { field: process.parent_chain, op: in, value: [npm, pip, pip3, uv, cargo] }
         - { field: process.name, op: in, value: [sh, bash, curl, wget] }
 ```
-30 rules ship by default: general techniques (S1–S18) and developer-targeted ones (D1–D8: remote-access tools, tunnels, exposed dev servers, network activity during package installs, and more). The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
+45 rules ship by default: general techniques (S1–S18), developer-targeted ones (D1–D11: remote-access tools, tunnels, exposed dev servers, network activity during package installs, exfiltration-friendly services, AI CLIs talking to unofficial endpoints, and more) and DNS tampering (N1–N6: hosts file edits, resolver changes, DoH cross-check, and more). The rule syntax and the full list of fields rules can use are documented in [docs/detections.md](docs/detections.md) (Japanese).
 
 ## Roadmap
 - [x] **v0.1** Monitoring, detection and alerts on both OSes; YAML rules, replay, beacon scoring, threat intel
 - [x] macOS menu bar app (Kanmon.app) and status socket
 - [ ] Linux blocking (eBPF + NFQUEUE, pinned deny maps, fail-open/closed)
 - [ ] macOS blocking (Network Extension, dynamic code-signature checks)
-- [ ] DNS attribution (domain names, DoH bypass detection)
+- [x] Domain names for destinations (passive DNS/SNI observation) and DNS tampering detection (hosts file, resolver settings, DoH cross-check)
 - [ ] Exfiltration volume detection, newly-registered-domain feeds
 - [ ] Web UI, syslog / SIEM integration
 
 ## Known limitations (v0.1)
 - **Polling-based**: connections shorter than the poll interval (500 ms by default) can be missed
-- Destinations are **IP-only**; no domain names yet
+- Domain names come from observed DNS responses and TLS SNI, so **some connections stay unnamed** (QUIC, ECH-hidden SNI, names resolved before kanmon started, apps doing their own DNS over HTTPS)
 - An attacker with root can disable kanmon. Configure `heartbeat_url` so an outside service notices when it stops
 - Traffic in other network namespaces (containers) is not covered
 
