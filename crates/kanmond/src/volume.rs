@@ -16,17 +16,26 @@ use kanmon_core::volume::FlowBytes;
 
 // ---------------------------------------------------------------- Linux sock_diag
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const NLMSG_ERROR: u16 = 2;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const NLMSG_DONE: u16 = 3;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const SOCK_DIAG_BY_FAMILY: u16 = 20;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const NLM_F_REQUEST: u16 = 0x1;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const NLM_F_DUMP: u16 = 0x300;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const INET_DIAG_INFO: u16 = 2;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const TCP_LISTEN: u32 = 10;
 /// struct tcp_info の tcpi_bytes_acked の位置（Linux 4.1 以降）
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 const TCPI_BYTES_ACKED: usize = 120;
 
 /// 1 ソケット分（inode, ローカル, リモート, 累積送信バイト数）
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub type DiagRow = (u64, SocketAddr, SocketAddr, u64);
 
 /// SOCK_DIAG_BY_FAMILY の要求（TCP、待受以外の全状態、tcp_info 付き）
@@ -50,19 +59,24 @@ pub fn diag_request(family: u8, seq: u32) -> Vec<u8> {
     v
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn ne16(b: &[u8], i: usize) -> Option<u16> {
     Some(u16::from_ne_bytes(b.get(i..i + 2)?.try_into().ok()?))
 }
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn ne32(b: &[u8], i: usize) -> Option<u32> {
     Some(u32::from_ne_bytes(b.get(i..i + 4)?.try_into().ok()?))
 }
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn ne64(b: &[u8], i: usize) -> Option<u64> {
     Some(u64::from_ne_bytes(b.get(i..i + 8)?.try_into().ok()?))
 }
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn be16(b: &[u8], i: usize) -> Option<u16> {
     Some(u16::from_be_bytes(b.get(i..i + 2)?.try_into().ok()?))
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn diag_addr(family: u8, b: &[u8]) -> Option<IpAddr> {
     match family {
         2 => Some(IpAddr::V4(Ipv4Addr::new(b[0], b[1], b[2], b[3]))),
@@ -75,6 +89,7 @@ fn diag_addr(family: u8, b: &[u8]) -> Option<IpAddr> {
 }
 
 /// netlink の応答を読む。戻り値は（行, 終わりか）
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn parse_diag(buf: &[u8]) -> (Vec<DiagRow>, bool) {
     let mut out = vec![];
     let mut off = 0;
