@@ -17,6 +17,9 @@
 | `[notify] heartbeat_url` | 空 | 死活監視の push URL（healthchecks.io・Uptime Kuma 等）。kanmon が止められたことを外側で検知させる |
 | `local_blocklists` | `blocklist.txt` | 改行区切りの拒否リスト（IP・CIDR・ドメイン） |
 | `[[feeds]]` | Feodo・Spamhaus DROP | 脅威インテルのフィード。https のみ、日次で更新 |
+| `status_socket` | macOS `/var/run/kanmond.sock`、Linux `/run/kanmon/kanmond.sock` | 状態ソケット（読み取り専用）。メニューバーアプリが使う。空文字で無効 |
+| `status_allowed_uids` | 空 | 状態ソケットへの接続を追加で許す uid。root とログイン中のユーザーは常に許可 |
+| `[notify] defer_to_app` | true | メニューバーアプリが動いている間は、ダイアログとバナーをアプリに任せる（ntfy は送る） |
 
 ## CLI（kanmonctl）
 | コマンド | 用途 |
@@ -48,6 +51,16 @@
 - `process.match` に指定できるもの：`signature` / `package` / `hash` / `path` / `any`
 - 複数のルールに一致した場合は、具体的なルールを優先します（プロセス指定 ＞ 宛先指定 ＞ ポート指定）。同じ具体度なら deny を優先します。
 - 有効期限を付けられます：`"lifetime":{"kind":"until","until":"2026-12-31T00:00:00+09:00"}`
+
+## メニューバーアプリ（macOS）
+```bash
+macos/build-app.sh      # macos/build/Kanmon.app を作る（仮の署名）
+macos/install-app.sh    # /Applications に置き、ログイン時に自動起動（sudo 不要）
+```
+- 3 秒ごとに状態ソケットを読み、アイコンの色を変えます：緑＝正常、黄＝未読の notice、赤＝未読の warn / critical、灰＝kanmond に接続できない（停止させられた可能性）
+- 新しい warn 以上の警告は、閉じるまで残る詳細ウィンドウで出します。メニューから直近 10 件を開けます
+- 「既読にする」でアイコンを緑に戻します
+- Developer ID で署名するには `KANMON_SIGN_IDENTITY="Developer ID Application: …" macos/build-app.sh` を使います
 
 ## 保存先
 | 種類 | Linux | macOS |

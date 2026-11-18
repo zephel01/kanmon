@@ -5,6 +5,7 @@ use crate::identity::{self, IdCache};
 use crate::notify::{self, Message, Notifier};
 use crate::procinfo::{basename, user_name, ProcCache};
 use crate::sockets::{listen_ports, Collector, Proto, Sock, State};
+use crate::status::{AlertItem, Shared, Snapshot};
 use anyhow::{Context, Result};
 use chrono::{Local, SecondsFormat, Utc};
 use kanmon_core::detect::{DetectionSet, Reloader};
@@ -17,6 +18,7 @@ use kanmon_core::store::{ProcRow, Store};
 use kanmon_core::{beacon, netclass};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -50,6 +52,8 @@ pub struct Monitor {
     last_feed: Option<Instant>,
     last_heartbeat: Option<Instant>,
     self_pid: u32,
+    shared: Arc<Shared>,
+    last_counts: Instant,
     pub print: bool,
 }
 
@@ -91,12 +95,35 @@ impl Monitor {
         let jsonl = JsonlWriter::open(&cfg.jsonl.path, cfg.jsonl.max_mb * 1024 * 1024, cfg.jsonl.keep)?;
         let intel = crate::feeds::load(&cfg);
         eprintln!("kanmond: 脅威インテル {} 件", intel.len());
-        let notifier = Notifier::new(&cfg.notify);
         let host = cfg.host_name.clone().unwrap_or_else(hostname);
+        let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
+        let learning_until = (cfg.mode == "learning" && cfg.learning_days > 0)
+            .then(|| chrono::DateTime::from_timestamp(installed_at + cfg.learning_days as i64 * 86_400, 0))
+            .flatten()
+            .map(|t| t.with_timezone(&Local).to_rfc3339_opts(SecondsFormat::Secs, false));
+        let shared = Shared::new(Snapshot {
+            version: env!("CARGO_PKG_VERSION").into(),
+            host: host.clone(),
+            os: os.into(),
+            mode: cfg.mode.clone(),
+            learning_until,
+            started_at: Local::now().to_rfc3339_opts(SecondsFormat::Secs, false),
+            detections: dets.detections.len(),
+            intel: intel.len(),
+            events_path: cfg.jsonl.path.display().to_string(),
+            ..Default::default()
+        });
+        if !cfg.status_socket.is_empty() {
+            match crate::status::serve(Path::new(&cfg.status_socket), shared.clone(), cfg.status_allowed_uids.clone()) {
+                Ok(p) => eprintln!("kanmond: 状態ソケット {}", p.display()),
+                Err(e) => eprintln!("kanmond: 状態ソケットを開けません（監視は継続）: {e:#}"),
+            }
+        }
+        let notifier = Notifier::new(&cfg.notify, Some(shared.clone()));
         let rules_mtime = std::fs::metadata(&cfg.rules_file).and_then(|m| m.modified()).ok();
         Ok(Self {
             host,
-            os: if cfg!(target_os = "macos") { "macos" } else { "linux" },
+            os,
             collector: Collector::new()?,
             procs: ProcCache::default(),
             ids: IdCache::default(),
@@ -120,6 +147,8 @@ impl Monitor {
             last_feed: None,
             last_heartbeat: None,
             self_pid: std::process::id(),
+            shared,
+            last_counts: Instant::now() - Duration::from_secs(3600),
             print: false,
             cfg,
         })
@@ -180,6 +209,8 @@ impl Monitor {
                 match r {
                     Ok(d) => {
                         eprintln!("kanmond: 検知ルールを再読込（{} 件）", d.detections.len());
+                        let n = d.detections.len();
+                        self.shared.update(|s| s.detections = n);
                         self.dets = d;
                     }
                     Err(e) => {
@@ -222,6 +253,8 @@ impl Monitor {
         if self.intel_dirty.swap(false, Ordering::SeqCst) {
             self.intel = crate::feeds::load(&self.cfg);
             eprintln!("kanmond: 脅威インテル {} 件", self.intel.len());
+            let n = self.intel.len();
+            self.shared.update(|s| s.intel = n);
         }
         // ビーコン（既定 5 分ごと）
         if self.last_beacon.elapsed() > Duration::from_secs(self.cfg.beacon_interval_s.max(5)) {
@@ -240,6 +273,17 @@ impl Monitor {
             self.last_heartbeat = Some(Instant::now());
             let url = hb.clone();
             std::thread::spawn(move || notify::heartbeat(&url));
+        }
+        // 状態ソケット用の集計（1 分ごと）
+        if self.last_counts.elapsed() > Duration::from_secs(60) {
+            self.last_counts = Instant::now();
+            let since = Utc::now().timestamp() - 86_400;
+            let counts = self.store.level_counts(since).unwrap_or_default();
+            let learning = self.learning();
+            self.shared.update(|s| {
+                s.counts_24h = counts.into_iter().collect();
+                s.learning = learning;
+            });
         }
         // 保持期間（1 日ごと）
         if self.last_prune.elapsed() > Duration::from_secs(86_400) {
@@ -428,12 +472,33 @@ impl Monitor {
         }
         let sig_ids: Vec<&str> = out.signals.iter().map(|s| s.id.as_str()).collect();
         let (title, body) = kanmon_core::format::alert_text(&v);
+        self.record_alert(&v, out.level, out.score, kind, &title, &body);
         let min = self.min_notify_level();
         self.notifier.send(
             Message { level: out.level, title, body, dedup_key: format!("{proc_key}|{kind}|{}", sig_ids.join(",")) },
             min,
         );
         Ok(true)
+    }
+
+    /// 状態ソケットに出す直近の警告（notice 以上）と最終イベント時刻を更新
+    fn record_alert(&self, v: &serde_json::Value, level: Level, score: i32, kind: &str, title: &str, body: &str) {
+        let ts = v.get("@timestamp").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        let tsc = ts.clone();
+        self.shared.update(|s| s.last_event_at = Some(tsc));
+        if level < Level::Notice {
+            return;
+        }
+        let id = ev::get_path(v, "event.id").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        self.shared.push_alert(AlertItem {
+            id,
+            ts,
+            level: level.as_str().into(),
+            score,
+            kind: kind.into(),
+            title: title.into(),
+            body: body.into(),
+        });
     }
 
     /// 直近 24h の接続開始時刻からビーコン候補を出す（判定経路には載せない）
@@ -490,6 +555,7 @@ impl Monitor {
                 println!("{}", serde_json::to_string(&v)?);
             }
             let (title, body) = kanmon_core::format::alert_text(&v);
+            self.record_alert(&v, out.level, out.score, "beacon_report", &title, &body);
             let min = self.min_notify_level();
             self.notifier.send(Message { level: out.level, title, body, dedup_key: format!("beacon|{pk}|{dk}") }, min);
             n += 1;

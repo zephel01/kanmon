@@ -36,6 +36,7 @@ kanmon は端末から出入りする通信を 1 本ずつ調べて、次の 2 �
 - 💬 **なぜ止めたかが分かる通知**：理由・点数・プロセス・宛先を全文で表示します。warn 以上は閉じるまで残ります
 - 📡 **ビーコン検知**：C2 によくある「一定周期の通信」を統計で拾います。正規のクラウドを経由した C2 にも効きます
 - 🛡️ **脅威インテル**：Feodo Tracker・Spamhaus DROP・ローカルの拒否リストと照合します
+- 🖥️ **メニューバーアプリ（macOS）**：盾のアイコンの色で状態が分かります（緑＝正常、黄＝注意、赤＝警告、灰＝停止）。警告は詳細ウィンドウで全文を表示します
 - 🔒 **自分の身も守る**：root 所有でないルールは読みません。通知は引数で渡すので注入できません。外部の死活監視とも連携できます
 
 ## クイックスタート
@@ -53,6 +54,11 @@ sudo packaging/install-macos.sh
 git clone https://github.com/zephel01/kanmon.git && cd kanmon
 cargo build --release
 sudo packaging/install-linux.sh
+```
+
+**メニューバーアプリ（macOS 13 以降）**
+```bash
+macos/build-app.sh && macos/install-app.sh   # sudo 不要。ログイン時に自動起動
 ```
 
 警告を見るには次を実行します。
@@ -108,6 +114,7 @@ detections:
 
 ## ロードマップ
 - [x] **v0.1** 両 OS の監視・検知・通知、YAML ルール、replay、ビーコン、脅威インテル
+- [x] macOS メニューバーアプリ（Kanmon.app）と状態ソケット
 - [ ] Linux での遮断（eBPF + NFQUEUE、拒否マップのピン留め、フェイルオープン/クローズの切替）
 - [ ] macOS での遮断（Network Extension、実行中プロセスの署名検証）
 - [ ] DNS の強化（ドメイン名の付与、DoH 迂回の検知）

@@ -28,6 +28,7 @@ strict_owner = true
 local_blocklists = ["$W/etc/blocklist.txt"]
 beacon_interval_s = 10
 feeds = []
+status_socket = "$W/kanmond.sock"
 [jsonl]
 path = "$W/events.jsonl"
 [notify]
@@ -94,6 +95,13 @@ echo "[E] 疑似ビーコン：1 秒周期 × 10 回（S7）"
 "$W/netclient" 203.0.113.20 443 10 1000 500
 sleep 12  # ビーコン集計を待つ
 
+echo "[F] 状態ソケット（メニューバーアプリ用）"
+python3 - "$W/kanmond.sock" > "$W/status.json" <<'PY'
+import socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+s.sendall(b'{"cmd":"status"}\n'); print(s.makefile().readline().strip())
+PY
+
 kill $D; wait $D 2>/dev/null || true
 sleep 0.5
 
@@ -134,6 +142,8 @@ except FileNotFoundError:
     n = []
 check("ntfy に通知が届いた（critical を含む）", any(x.get("priority") == 5 for x in n))
 check("通知本文に理由の説明が入っている", any("脅威インテル（既知の悪性" in x.get("message","") for x in n))
+st = json.load(open(sys.argv[1].replace("events.jsonl", "status.json")))
+check("F: 状態ソケットが critical の警告を返す", any(a["level"] == "critical" for a in st.get("alerts", [])) and st.get("version"))
 g = find(lambda e: e["network"]["kind"] == "listen" and e.get("source",{}).get("port") == 8888)
 check("G: 0.0.0.0:8888 の待受に D3", g and "D3" in sig(g[0]))
 hh = find(lambda e: e["network"]["kind"] == "connect" and "npm" in e["process"].get("parent_chain", []))

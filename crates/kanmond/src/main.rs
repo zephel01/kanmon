@@ -12,6 +12,7 @@ mod monitor;
 mod notify;
 mod procinfo;
 mod sockets;
+mod status;
 
 use clap::Parser;
 

@@ -19,3 +19,13 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+  macos-app:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Kanmon.app（メニューバーアプリ）をビルド
+        run: bash macos/build-app.sh
+      - name: バンドルの中身を確認
+        run: |
+          plutil -p macos/build/Kanmon.app/Contents/Info.plist
+          file macos/build/Kanmon.app/Contents/MacOS/KanmonBar

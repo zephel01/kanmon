@@ -1,0 +1,264 @@
+//! 状態ソケット（読み取り専用）。メニューバーアプリ等が kanmond の状態と直近の警告を取得する。
+//!
+//! - Unix ドメインソケット。1 行の JSON 要求に 1 行の JSON で答えて閉じる
+//!   - `{"cmd":"status"}` → 状態スナップショット
+//!   - `{"cmd":"ping"}`   → `{"ok":true}`
+//! - 設定は変更できない（読み取り専用）。モード変更などは管理者認証つきの別経路で行う
+//! - 接続相手の uid を検証する：root・ログイン中のユーザー・`status_allowed_uids` のみ
+//! - アプリが接続している間（直近 15 秒以内に要求あり）は、OS ローカル通知をアプリに任せる
+
+use anyhow::{Context, Result};
+use serde::Serialize;
+use std::collections::{BTreeMap, VecDeque};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+pub const MAX_ALERTS: usize = 50;
+const MAX_REQUEST: u64 = 4096;
+/// この秒数以内に要求があれば「アプリ接続中」とみなす
+pub const APP_ACTIVE_SECS: i64 = 15;
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct AlertItem {
+    pub id: String,
+    pub ts: String,
+    pub level: String,
+    pub score: i32,
+    pub kind: String,
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct Snapshot {
+    pub version: String,
+    pub host: String,
+    pub os: String,
+    pub mode: String,
+    pub learning: bool,
+    /// 学習期間の終了予定（RFC 3339）。learning_days=0 なら None
+    pub learning_until: Option<String>,
+    pub started_at: String,
+    pub detections: usize,
+    pub intel: usize,
+    /// 直近 24 時間のレベル別件数
+    pub counts_24h: BTreeMap<String, i64>,
+    /// 直近の警告（notice 以上、新しい順、最大 50 件）
+    pub alerts: VecDeque<AlertItem>,
+    pub last_event_at: Option<String>,
+    pub events_path: String,
+}
+
+pub struct Shared {
+    snap: Mutex<Snapshot>,
+    last_client: AtomicI64,
+}
+
+impl Shared {
+    pub fn new(base: Snapshot) -> Arc<Self> {
+        Arc::new(Self { snap: Mutex::new(base), last_client: AtomicI64::new(0) })
+    }
+
+    pub fn update<F: FnOnce(&mut Snapshot)>(&self, f: F) {
+        if let Ok(mut s) = self.snap.lock() {
+            f(&mut s);
+        }
+    }
+
+    pub fn push_alert(&self, a: AlertItem) {
+        self.update(|s| {
+            s.alerts.push_front(a);
+            s.alerts.truncate(MAX_ALERTS);
+        });
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        self.snap.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    pub fn touch_client(&self) {
+        self.last_client.store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
+    }
+
+    /// メニューバーアプリが接続中か
+    pub fn app_active(&self) -> bool {
+        chrono::Utc::now().timestamp() - self.last_client.load(Ordering::Relaxed) <= APP_ACTIVE_SECS
+    }
+}
+
+/// 要求 1 行に対する応答（純関数。テスト用に分離）
+pub fn respond(req: &str, shared: &Shared) -> String {
+    let cmd = serde_json::from_str::<serde_json::Value>(req.trim())
+        .ok()
+        .and_then(|v| v.get("cmd").and_then(|c| c.as_str()).map(str::to_string));
+    match cmd.as_deref() {
+        Some("status") => {
+            shared.touch_client();
+            serde_json::to_string(&shared.snapshot()).unwrap_or_else(|_| r#"{"error":"serialize"}"#.into())
+        }
+        Some("ping") => r#"{"ok":true}"#.into(),
+        _ => r#"{"error":"unknown command"}"#.into(),
+    }
+}
+
+/// 接続相手の uid
+#[cfg(target_os = "macos")]
+pub fn peer_uid(s: &UnixStream) -> Option<u32> {
+    use std::os::unix::io::AsRawFd;
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    let r = unsafe { libc::getpeereid(s.as_raw_fd(), &mut uid, &mut gid) };
+    (r == 0).then_some(uid)
+}
+
+#[cfg(target_os = "linux")]
+pub fn peer_uid(s: &UnixStream) -> Option<u32> {
+    use std::os::unix::io::AsRawFd;
+    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let r = unsafe {
+        libc::getsockopt(
+            s.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut _ as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    (r == 0).then_some(cred.uid)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn peer_uid(_s: &UnixStream) -> Option<u32> {
+    None
+}
+
+/// 接続を許す uid か：root、ログイン中のユーザー、設定で許可した uid
+pub fn uid_allowed(uid: u32, extra: &[u32]) -> bool {
+    if uid == 0 || extra.contains(&uid) {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if std::fs::metadata("/dev/console").map(|m| m.uid()).ok() == Some(uid) {
+            return true;
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if Path::new(&format!("/run/user/{uid}")).exists() {
+            return true;
+        }
+    }
+    false
+}
+
+fn handle(mut s: UnixStream, shared: &Shared, extra: &[u32]) {
+    let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
+    let uid = peer_uid(&s);
+    if !uid.is_some_and(|u| uid_allowed(u, extra)) {
+        let _ = s.write_all(b"{\"error\":\"forbidden\"}\n");
+        return;
+    }
+    let mut line = String::new();
+    let mut r = BufReader::new((&s).take(MAX_REQUEST));
+    if r.read_line(&mut line).is_err() {
+        return;
+    }
+    let mut out = respond(&line, shared);
+    out.push('\n');
+    let _ = s.write_all(out.as_bytes());
+}
+
+/// ソケットを作って待ち受けスレッドを起動する
+pub fn serve(path: &Path, shared: Arc<Shared>, extra_uids: Vec<u32>) -> Result<PathBuf> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("mkdir {}", dir.display()))?;
+    }
+    // 前回の残骸（ソケットのみ）を消す。通常ファイルなら消さずにエラー
+    if let Ok(md) = std::fs::symlink_metadata(path) {
+        use std::os::unix::fs::FileTypeExt;
+        if md.file_type().is_socket() {
+            std::fs::remove_file(path)?;
+        } else {
+            anyhow::bail!("{} はソケットではありません。削除しません", path.display());
+        }
+    }
+    let listener = UnixListener::bind(path).with_context(|| format!("bind {}", path.display()))?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // 接続自体は誰でも可。uid の検証は接続後に行う
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))?;
+    }
+    let p = path.to_path_buf();
+    std::thread::Builder::new().name("status".into()).spawn(move || {
+        for s in listener.incoming().flatten() {
+            handle(s, &shared, &extra_uids);
+        }
+    })?;
+    Ok(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(i: usize) -> AlertItem {
+        AlertItem {
+            id: format!("e{i}"),
+            ts: "t".into(),
+            level: "warn".into(),
+            score: 60,
+            kind: "connect".into(),
+            title: "t".into(),
+            body: "b".into(),
+        }
+    }
+
+    #[test]
+    fn respond_and_ring() {
+        let sh = Shared::new(Snapshot { version: "0.1.0".into(), ..Default::default() });
+        for i in 0..60 {
+            sh.push_alert(item(i));
+        }
+        assert!(!sh.app_active());
+        let v: serde_json::Value = serde_json::from_str(&respond(r#"{"cmd":"status"}"#, &sh)).unwrap();
+        assert_eq!(v["version"], "0.1.0");
+        assert_eq!(v["alerts"].as_array().unwrap().len(), MAX_ALERTS);
+        assert_eq!(v["alerts"][0]["id"], "e59", "新しい順");
+        assert!(sh.app_active(), "status 要求でアプリ接続中になる");
+        assert_eq!(respond(r#"{"cmd":"ping"}"#, &sh), r#"{"ok":true}"#);
+        assert!(respond("garbage", &sh).contains("unknown"));
+    }
+
+    #[test]
+    fn socket_roundtrip_and_uid() {
+        let dir = std::env::temp_dir().join(format!("kanmon-sock-{}", std::process::id()));
+        let path = dir.join("k.sock");
+        let sh = Shared::new(Snapshot { host: "h".into(), ..Default::default() });
+        // テストを実行する uid を許可リストに入れる
+        let me = unsafe { libc::geteuid() };
+        serve(&path, sh.clone(), vec![me]).unwrap();
+        let mut c = UnixStream::connect(&path).unwrap();
+        c.write_all(b"{\"cmd\":\"status\"}\n").unwrap();
+        let mut s = String::new();
+        BufReader::new(&c).read_line(&mut s).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["host"], "h");
+        assert_eq!(peer_uid(&c), Some(me));
+        assert!(uid_allowed(0, &[]));
+        assert!(!uid_allowed(4_000_000_000, &[]));
+        // 通常ファイルは消さない
+        let f = dir.join("plain");
+        std::fs::write(&f, "x").unwrap();
+        assert!(serve(&f, sh, vec![]).is_err());
+        assert!(f.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

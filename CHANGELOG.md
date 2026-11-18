@@ -5,6 +5,10 @@
 ## [Unreleased]
 
 ### 追加
+- **macOS メニューバーアプリ（Kanmon.app）**：アイコンの色で状態を表示（緑・黄・赤・灰）、直近の警告一覧、警告の詳細ウィンドウ（コピー可）、学習期間の残り日数、既読管理。SwiftUI（macOS 13 以降）。`macos/build-app.sh` / `macos/install-app.sh`
+- **状態ソケット（読み取り専用）**：kanmond が状態と直近 50 件の警告を Unix ソケットで返す。接続相手の uid を検証する（root・ログイン中のユーザー・許可した uid のみ）
+- 設定：`status_socket`、`status_allowed_uids`、`notify.defer_to_app`（アプリが動いている間はローカル通知をアプリに任せる）
+- CI：macOS で Kanmon.app のビルドと署名検証
 - **開発者を狙う手口の検知ルール**（`detections/40-developer.yaml`、11 件）：遠隔操作ソフト、トンネルツールと SSH のリバーストンネル、開発・AI サーバーとデバッガのポートの外部公開、パッケージ導入処理の配下からの通信、スクリプトによる非標準ポートへの通信、osascript の通信、マイニングプール向けのポート、Telegram 以外のプロセスから Telegram のサーバーへの通信
 - 検知ルールの演算子 `cidr`（IP アドレスの範囲判定）
 - 親プロセスの列にスクリプト名を追加（`npm-cli.js`・`pip`・`makepkg` 等）。インタプリタ経由のパッケージマネージャも判定できるようにした

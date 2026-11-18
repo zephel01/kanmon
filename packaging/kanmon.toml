@@ -17,6 +17,9 @@ include_loopback = false
 retention_days = 90
 beacon_report_min = 0.6
 beacon_interval_s = 300
+# 状態ソケット（読み取り専用、メニューバーアプリ用）。空文字で無効
+# status_socket = "/var/run/kanmond.sock"   # Linux 既定は /run/kanmon/kanmond.sock
+# status_allowed_uids = []
 feeds_refresh_hours = 24
 # local_blocklists = ["/etc/kanmon/blocklist.txt"]
 
@@ -45,6 +48,8 @@ heartbeat_minutes = 5
 # このレベル以上は、閉じるまで残るダイアログ（macOS）／期限なし通知（Linux）で全文を表示
 alert_level = "warn"
 alert_timeout_s = 600
+# メニューバーアプリ（Kanmon.app）が動いている間は、ダイアログ・バナーをアプリに任せる
+defer_to_app = true
 
 [[feeds]]
 name = "feodo"

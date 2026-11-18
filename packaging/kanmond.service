@@ -14,6 +14,9 @@ User=root
 Nice=5
 ProtectSystem=strict
 ReadWritePaths=/var/lib/kanmon /var/log/kanmon
+# 状態ソケット /run/kanmon/kanmond.sock
+RuntimeDirectory=kanmon
+RuntimeDirectoryMode=0755
 ProtectHome=read-only
 PrivateTmp=false
 NoNewPrivileges=true
