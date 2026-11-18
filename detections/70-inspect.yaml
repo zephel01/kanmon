@@ -1,0 +1,65 @@
+# パッケージの更新差分の検査（kanmonctl inspect）。イベントの network.kind は inspect。
+# kanmonctl が「指定した版と 1 つ前の版」の差分から特徴（kanmon.inspect.features）を拾い、ここで点数を付ける。
+# 1 つの特徴だけでは決め手にならない（正規のパッケージにも出る）。組み合わせ（IC1〜IC4）で重くなる。
+# 点数の初期値の考え方は docs/inspect.md。
+detections:
+  - { id: I1, name: install_script, points: 25, kinds: [inspect], description: "導入時に動くスクリプト（npm の preinstall・postinstall 等、sdist の setup.py）が追加・変更された", when: { field: kanmon.inspect.features, op: in, value: [install_script] } }
+  - { id: I2, name: pth_exec, points: 40, kinds: [inspect], description: "Python の起動のたびに実行される .pth が増えた", when: { field: kanmon.inspect.features, op: in, value: [pth_exec] } }
+  - { id: I3, name: new_top_level, points: 15, kinds: [inspect], description: "前の版に無いトップレベルのモジュール・スクリプトが増えた", when: { field: kanmon.inspect.features, op: in, value: [new_top_level] } }
+  - { id: I4, name: entry_changed, points: 10, kinds: [inspect], description: "読み込みの入口（main・exports・__init__.py の import）が変わった", when: { field: kanmon.inspect.features, op: in, value: [entry_changed] } }
+  - { id: I5, name: obfuscation, points: 20, kinds: [inspect], description: "難読化（長い符号化文字列・極端に長い行・eval(atob(…)) 等）", when: { field: kanmon.inspect.features, op: in, value: [obfuscation] } }
+  - { id: I6, name: env_harvest, points: 25, kinds: [inspect], description: "環境変数をまとめて集める（TOKEN・SECRET 等で選ぶ、/proc/*/environ）", when: { field: kanmon.inspect.features, op: in, value: [env_harvest] } }
+  - { id: I7, name: cred_paths, points: 25, kinds: [inspect], description: "認証ファイルのパス（.npmrc・.git-credentials・~/.aws・~/.azure・~/.ssh 等）", when: { field: kanmon.inspect.features, op: in, value: [cred_paths] } }
+  - { id: I8, name: detach, points: 15, kinds: [inspect], description: "親から切り離して動く（fork と setsid、detached と unref、nohup）", when: { field: kanmon.inspect.features, op: in, value: [detach] } }
+  - { id: I9, name: exfil_host, points: 30, kinds: [inspect], description: "盗んだ情報の置き場に使われやすいサービス（webhook.site 等）", when: { field: kanmon.inspect.features, op: in, value: [exfil_host] } }
+  - { id: I10, name: chain_rpc, points: 30, kinds: [inspect], description: "ブロックチェーンの公開 RPC（C2 の連絡先の置き場）", when: { field: kanmon.inspect.features, op: in, value: [chain_rpc] } }
+  - { id: I11, name: raw_ip_url, points: 15, kinds: [inspect], description: "IP アドレスを直接書いた URL", when: { field: kanmon.inspect.features, op: in, value: [raw_ip_url] } }
+  - { id: I12, name: hidden_url, points: 30, kinds: [inspect], description: "base64 で隠した URL", when: { field: kanmon.inspect.features, op: in, value: [hidden_url] } }
+  - { id: I13, name: download_exec, points: 25, kinds: [inspect], description: "ダウンロードして実行（curl | sh、実行ファイルを取って chmod）", when: { field: kanmon.inspect.features, op: in, value: [download_exec] } }
+  - { id: I14, name: ci_secrets, points: 20, kinds: [inspect], description: "CI のシークレット・OIDC トークンを扱う（toJSON(secrets)、ACTIONS_ID_TOKEN_REQUEST 等）", when: { field: kanmon.inspect.features, op: in, value: [ci_secrets] } }
+  - { id: I15, name: archive_anomaly, points: 30, kinds: [inspect], description: "アーカイブに不正なパス（..・絶対パス）やリンクがある", when: { field: kanmon.inspect.features, op: in, value: [archive_anomaly] } }
+  - { id: I16, name: archive_limit, points: 10, kinds: [inspect], description: "展開の上限（大きさ・件数・圧縮比）を超えたので途中までしか見ていない", when: { field: kanmon.inspect.features, op: in, value: [archive_limit, oversize_file] } }
+  - { id: I17, name: fresh_release, points: 5, kinds: [inspect], description: "公開から 7 日未満", when: { field: kanmon.inspect.features, op: in, value: [fresh_release] } }
+  - { id: I18, name: burst_release, points: 10, kinds: [inspect], description: "前の版から 2 時間以内の公開", when: { field: kanmon.inspect.features, op: in, value: [burst_release] } }
+  - { id: I19, name: publisher_changed, points: 15, kinds: [inspect], description: "公開した人が前の版と違う（npm）", when: { field: kanmon.inspect.features, op: in, value: [publisher_changed] } }
+  - { id: I20, name: attestation_dropped, points: 20, kinds: [inspect], description: "前の版にあった証明（attestation）が無い（npm）", when: { field: kanmon.inspect.features, op: in, value: [attestation_dropped] } }
+
+  - id: IC1
+    name: autorun_and_send
+    points: 30
+    description: 勝手に動く仕掛け（.pth・導入時のスクリプト）と、外への送り先がそろっている
+    kinds: [inspect]
+    when:
+      all:
+        - { field: kanmon.inspect.features, op: in, value: [pth_exec, install_script] }
+        - { field: kanmon.inspect.features, op: in, value: [exfil_host, hidden_url, chain_rpc] }
+
+  - id: IC2
+    name: harvest_and_send
+    points: 30
+    description: 秘密を集める処理（環境変数・認証ファイル）と、外への送り先がそろっている
+    kinds: [inspect]
+    when:
+      all:
+        - { field: kanmon.inspect.features, op: in, value: [env_harvest, cred_paths] }
+        - { field: kanmon.inspect.features, op: in, value: [exfil_host, hidden_url, chain_rpc, raw_ip_url] }
+
+  - id: IC3
+    name: detach_and_harvest
+    points: 15
+    description: 親から切り離して、環境変数を集める
+    kinds: [inspect]
+    when:
+      all:
+        - { field: kanmon.inspect.features, op: in, value: [detach] }
+        - { field: kanmon.inspect.features, op: in, value: [env_harvest] }
+
+  - id: IC4
+    name: burst_with_autorun
+    points: 15
+    description: 前の版からすぐの公開で、勝手に動く仕掛けや新しいトップレベルが増えた
+    kinds: [inspect]
+    when:
+      all:
+        - { field: kanmon.inspect.features, op: in, value: [burst_release] }
+        - { field: kanmon.inspect.features, op: in, value: [pth_exec, install_script, new_top_level] }

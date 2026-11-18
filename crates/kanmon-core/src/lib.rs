@@ -11,6 +11,7 @@ pub mod dga;
 pub mod dnsguard;
 pub mod event;
 pub mod format;
+pub mod inspect;
 pub mod intel;
 pub mod jsonl;
 pub mod names;

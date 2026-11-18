@@ -29,7 +29,7 @@ kanmon は端末から出入りする通信を 1 本ずつ調べて、次の 2 �
 </p>
 
 > [!NOTE]
-> 今の版（v0.2）は**監視と通知だけ**で、通信の遮断はまだしません。遮断はロードマップの次の段階です。
+> 今の版（v0.3）は**監視と通知だけ**で、通信の遮断はまだしません。遮断はロードマップの次の段階です。
 
 ## 特徴
 - 🔍 **プロセス単位で見る**：通信ごとに、実行ファイル・署名（Apple / Developer ID / ad-hoc / 未署名）・所有パッケージ・SHA-256・親プロセスの列を記録します
@@ -37,6 +37,7 @@ kanmon は端末から出入りする通信を 1 本ずつ調べて、次の 2 �
 - 💬 **なぜ止めたかが分かる通知**：理由・点数・プロセス・宛先を全文で表示します。warn 以上は閉じるまで残ります
 - 📡 **ビーコン検知**：C2 によくある「一定周期の通信」を統計で拾います。正規のクラウドを経由した C2 にも効きます
 - 🪤 **居座りの検知**：Claude Code のフック、VS Code の自動実行タスク、`.pth`、Git のフック、自動起動など、開発ツールへの仕込みの追加・変更を知らせます（読むだけ）
+- 🔬 **パッケージの更新の検査**：`kanmonctl inspect pypi:名前==版` で、前の版からの差分に盗む処理によく出る形（`.pth`・導入時のスクリプト・環境変数の収集・認証ファイル・隠した URL・ブロックチェーンの RPC 等）がないかを調べます。コードは実行も展開もしません
 - 📦 **送信量の検知**：送った量を、開いているファイル（`.env`・`.git` の中身・GGUF 等）と宛先と合わせて判定します。モデルのアップロードのような正当な大量送信と、持ち出しを分けます
 - 🛡️ **脅威インテル**：Feodo Tracker・Spamhaus DROP・ローカルの拒否リストと照合します
 - 🖥️ **メニューバーアプリ（macOS）**：盾のアイコンの色で状態が分かります（緑＝正常、黄＝注意、赤＝警告、灰＝停止）。件数を押すとレベル別の一覧が開き、ルールで絞り込めます。警告は詳細ウィンドウで全文を表示します
@@ -105,7 +106,7 @@ detections:
         - { field: process.parent_chain, op: in, value: [npm, pip, pip3, uv, cargo] }
         - { field: process.name, op: in, value: [sh, bash, curl, wget] }
 ```
-同梱ルールは 69 件です。一般的な手口（S1〜S18）、開発者を狙う手口（D1〜D12：遠隔操作ソフト、トンネル、開発サーバーの公開、パッケージ導入時の通信、持ち出し先のサービス、AI CLI の非公式な宛先、ブロックチェーンの RPC など）、DNS の改ざん（N1〜N6：hosts の書き換え、DNS サーバーの変更、DoH での照合など）、送信量（V1〜V9）、居座り（P1〜P7・PW）、仕込みと送信の結び付け（C1・C2）を含みます。書き方と、ルールから参照できるフィールドは [docs/detections.md](docs/detections.md) にあります。
+同梱ルールは 93 件です。一般的な手口（S1〜S18）、開発者を狙う手口（D1〜D12：遠隔操作ソフト、トンネル、開発サーバーの公開、パッケージ導入時の通信、持ち出し先のサービス、AI CLI の非公式な宛先、ブロックチェーンの RPC など）、DNS の改ざん（N1〜N6：hosts の書き換え、DNS サーバーの変更、DoH での照合など）、送信量（V1〜V9）、居座り（P1〜P7・PW）、仕込みと送信の結び付け（C1・C2）、パッケージの更新の検査（I1〜I20・IC1〜IC4）を含みます。書き方と、ルールから参照できるフィールドは [docs/detections.md](docs/detections.md) にあります。
 
 ## Python の起動の仕掛け（.pth）を確かめる
 2026 年 11 月の agent-framework（PyPI）のように、`.pth` に 1 行足すだけで Python の起動のたびにコードが動きます。手元の `.pth` は次で一覧にできます（読むだけ）。
@@ -114,11 +115,20 @@ kanmonctl scan --root ~/works --kind pth_exec
 ```
 `[読み込み: …]` に見覚えのないモジュール名があれば、その `.pth` を入れたパッケージ（`pip show -f <名前>`）を確かめてください。`_virtualenv`・`_distutils_hack`・`__editable__` 等はよくあるものです。
 
+## パッケージの更新を入れる前に調べる
+```bash
+kanmonctl inspect pypi:agent-framework==1.26.2 --detections /usr/local/etc/kanmon/detections
+kanmonctl inspect npm:keyv@6.0.0 --detections /usr/local/etc/kanmon/detections
+kanmonctl inspect --file ./pkg-1.1.whl --base-file ./pkg-1.0.whl --detections …   # 手元のファイル（ネットワークを使わない）
+```
+指定した版と 1 つ前の版をレジストリ（PyPI・npm）から取り、ハッシュを照合してから、増えた部分だけを読みます。終了コードは warn で 2、critical で 3 なので、CI や更新の前の確認に使えます。1 つの特徴だけでは点数は低く、「勝手に動く仕掛け＋外への送り先」のような組み合わせで重くなります。詳しくは [docs/inspect.md](docs/inspect.md)。
+
 ## ドキュメント
 | 文書 | 内容 |
 |---|---|
 | [docs/detections.md](docs/detections.md) | 検知ルールの書き方、フィールド一覧、同梱ルール |
 | [docs/configuration.md](docs/configuration.md) | 設定、CLI、許可/拒否ルール、保存先 |
+| [docs/inspect.md](docs/inspect.md) | パッケージの更新の検査（`kanmonctl inspect`）の仕組み・特徴・点数 |
 | [docs/design-v1.md](docs/design-v1.md) | 設計書（脅威モデル・アーキテクチャ・ロードマップ） |
 | [CHANGELOG.md](CHANGELOG.md) | 変更履歴 |
 
