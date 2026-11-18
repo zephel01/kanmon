@@ -1,0 +1,22 @@
+name: release
+# バージョンを上げた変更が main に入ったら、タグ v<版> とリリースを作る（本文は CHANGELOG の該当節）
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: タグとリリース
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/release.sh

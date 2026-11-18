@@ -30,7 +30,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 </p>
 
 > [!NOTE]
-> v0.1 **observes and alerts only**. It does not block yet; blocking is the next milestone.
+> The current release (v0.2) **observes and alerts only**. It does not block yet; blocking is the next milestone.
 > Documentation beyond this page is currently in Japanese.
 
 ## Features
@@ -103,7 +103,7 @@ detections:
 - [ ] Exfiltration volume detection, newly-registered-domain feeds
 - [ ] Web UI, syslog / SIEM integration
 
-## Known limitations (v0.1)
+## Known limitations
 - **Polling-based**: connections shorter than the poll interval (500 ms by default) can be missed
 - Domain names come from observed DNS responses and TLS SNI, so **some connections stay unnamed** (QUIC, ECH-hidden SNI, names resolved before kanmon started, apps doing their own DNS over HTTPS)
 - An attacker with root can disable kanmon. Configure `heartbeat_url` so an outside service notices when it stops

@@ -1,8 +1,13 @@
 # Changelog
 
-このプロジェクトの主な変更を記録します。書式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/)、バージョンは [Semantic Versioning](https://semver.org/lang/ja/) に従います（1.0 までは、機能追加でマイナー、修正でパッチを上げます）。
+このプロジェクトの主な変更を記録します。書式は [Keep a Changelog](https://keepachangelog.com/ja/1.1.0/)、バージョンは [Semantic Versioning](https://semver.org/lang/ja/) に従います（1.0 までは、大きな段階でマイナー、その段階の中での機能追加と修正でパッチを上げます）。
+
+バージョンを上げた変更が main に入ると、GitHub Actions がタグ `v<版>` とリリースを作ります（本文はこのファイルの該当節）。
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-11-18
+宛先のドメイン名と DNS の改ざん検知、macOS メニューバーアプリ。
 
 ### 追加
 - **宛先のドメイン名**：DNS 応答と TLS ClientHello の SNI を受け身で読み（libpcap、プロミスキャスなし、DNS の設定は変えない）、接続イベントに `destination.domain`・`registered_domain`・`domain_source` を付ける。ドメインでの脅威インテル照合、DGA・トンネル系ドメインのルール（S9・S18）が実際の通信で効くようになった
