@@ -23,7 +23,7 @@ fn strs(v: &Value, k: &str) -> Vec<String> {
 fn bundled_detections_match_fixtures() {
     let base = DetectionSet::load_dir(&root().join("detections"), false).expect("detections/");
     let extra = DetectionSet::load_paths(
-        &[root().join("detections"), root().join("examples/detections/60-supply-chain.yaml")],
+        &[root().join("detections"), root().join("examples/detections/60-ai-cli-endpoint.yaml")],
         false,
     )
     .expect("extra");
@@ -43,12 +43,13 @@ fn bundled_detections_match_fixtures() {
                     failures.push(format!("[{name}] {want} が出ない（got {got:?}）"));
                 }
             }
-            if key == "_expect" {
-                for no in strs(&case, "_expect_not") {
-                    if got.contains(&no.as_str()) {
-                        failures.push(format!("[{name}] {no} が出てはいけない（got {got:?}）"));
-                    }
+            // _expect_not は基本セット・追加ルール込みの両方で確認する
+            for no in strs(&case, "_expect_not") {
+                if got.contains(&no.as_str()) {
+                    failures.push(format!("[{name}] {no} が出てはいけない（{key}: got {got:?}）"));
                 }
+            }
+            if key == "_expect" {
                 if let Some(l) = case.get("_level").and_then(|x| x.as_str()) {
                     if out.level.as_str() != l {
                         failures.push(format!(
