@@ -6,6 +6,14 @@
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-11-18
+macOS の導入スクリプトで kanmond が起動しないことがある問題の修正。
+
+### 修正
+- `packaging/install-macos.sh`・`macos/install-app.sh`：`launchctl bootout` の直後の `bootstrap` が「Bootstrap failed: 5: Input/output error」で失敗し、kanmond が登録されないまま終わることがあった（v0.2.3 の更新で発生）。止まりきるのを待ってから入れ替え・登録し、失敗したらやり直す。すでに登録済みなら `kickstart -k` で再起動する。最後にプロセスが起動したかを確かめ、起動していなければ対処の案内つきでエラーにする（`packaging/launchd-lib.sh`）
+- 疑似環境（`KANMON_PREFIX`）での導入では launchd に触らない
+- CI：導入スクリプトの shellcheck と、launchd の入れ替えの確認（`tests/harness/launchd_lib_test.sh`。launchctl を差し替えて、競合・登録拒否・通常の 3 通り）
+
 ## [0.2.3] - 2026-11-18
 送信量の検知、S7（周期通信）の誤検知の削減、ログの日付ごとの切り替え。
 

@@ -7,6 +7,10 @@ cd "$(dirname "$0")/.."
 [ "$(id -u)" = 0 ] || { echo "sudo で実行してください"; exit 1; }
 # P はテスト用の接頭辞（通常は空）。例：KANMON_PREFIX=/tmp/macroot で疑似環境に入れる
 P="${KANMON_PREFIX:-}"
+# shellcheck source=packaging/launchd-lib.sh
+. packaging/launchd-lib.sh
+# 疑似環境（KANMON_PREFIX）のときは launchd に触らない
+if [ -n "$P" ]; then launchd_stop() { :; }; launchd_start() { :; }; fi
 B="$P/Library/Application Support/kanmon"
 install -d -m 0755 "$B" "$B/etc" "$B/etc/detections" $P/Library/Logs/kanmon $P/usr/local/sbin $P/usr/local/bin
 
@@ -41,12 +45,13 @@ if [ -f $P/Library/LaunchDaemons/com.netmon.netmond.plist ] || [ -d "$OLD" ]; th
   echo "  （確認後に手動で削除: sudo rm -rf \"$OLD\" $P/Library/Logs/netmon）"
 fi
 
+# 動いている kanmond を止めきってから入れ替える
+launchd_stop system com.kanmon.kanmond
 install -m 0755 target/release/kanmond $P/usr/local/sbin/kanmond
 install -m 0755 target/release/kanmonctl $P/usr/local/bin/kanmonctl
 install -o root -g wheel -m 0644 detections/*.yaml "$B/etc/detections/"
 [ -f "$B/etc/kanmon.toml" ] || install -o root -g wheel -m 0644 packaging/kanmon.toml "$B/etc/kanmon.toml"
 [ -f "$B/etc/blocklist.txt" ] || install -o root -g wheel -m 0644 /dev/null "$B/etc/blocklist.txt"
 install -o root -g wheel -m 0644 packaging/com.kanmon.kanmond.plist $P/Library/LaunchDaemons/com.kanmon.kanmond.plist
-launchctl bootout system/com.kanmon.kanmond 2>/dev/null || true
-launchctl bootstrap system $P/Library/LaunchDaemons/com.kanmon.kanmond.plist
+launchd_start system com.kanmon.kanmond $P/Library/LaunchDaemons/com.kanmon.kanmond.plist kanmond
 echo "導入完了。確認: sudo tail -f $P/Library/Logs/kanmon/kanmond.log / sudo kanmonctl alerts --file $P/Library/Logs/kanmon/events.jsonl"
