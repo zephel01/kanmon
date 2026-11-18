@@ -226,8 +226,9 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
 
-    fn run_files(new: &[u8], old: &[u8], ext: &str) -> Report {
-        let d = std::env::temp_dir().join(format!("kanmon-insp-{}-{ext}", std::process::id()));
+    /// `tag` はテストごとに変える（テストは並行に動くので、同じディレクトリを使うと上書きし合う）
+    fn run_files(tag: &str, new: &[u8], old: &[u8], ext: &str) -> Report {
+        let d = std::env::temp_dir().join(format!("kanmon-insp-{}-{tag}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         let (n, o) = (d.join(format!("new.{ext}")), d.join(format!("old.{ext}")));
         std::fs::write(&n, new).unwrap();
@@ -264,7 +265,7 @@ mod tests {
             ("af_meta.pth", "import af_meta\n"),
             ("af_meta/__init__.py", payload),
         ]);
-        let r = run_files(&new, &old, "whl");
+        let r = run_files("af", &new, &old, "whl");
         assert_eq!(r.level, Level::Critical, "{} {:?}", r.score, r.signals);
         assert_eq!(exit_code(r.level), 3);
         let out = render(&r, false);
@@ -289,7 +290,7 @@ mod tests {
             ("package/dist/index.js", "module.exports = 1;\n"),
             ("package/setup.mjs", setup),
         ]);
-        let r = run_files(&new, &old, "tgz");
+        let r = run_files("keyv", &new, &old, "tgz");
         assert_eq!(r.level, Level::Critical, "{} {:?}", r.score, r.signals);
     }
 
@@ -301,7 +302,7 @@ mod tests {
             ("pkg/util.py", "import os\ndef f():\n    return os.environ.get('HOME', '')\n"),
             ("pkg/extra.py", "URL = 'https://pypi.org/simple/'\n"),
         ]);
-        let r = run_files(&new, &old, "whl");
+        let r = run_files("benign", &new, &old, "whl");
         assert_eq!(r.level, Level::Info, "{} {:?} {:?}", r.score, r.signals, r.findings);
         assert_eq!(exit_code(r.level), 0);
     }
