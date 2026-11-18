@@ -26,6 +26,8 @@ cat > "$PLIST" <<PL
   <key>ProgramArguments</key><array><string>$DEST/Contents/MacOS/KanmonBar</string></array>
   <key>RunAtLoad</key><true/>
   <key>ProcessType</key><string>Interactive</string>
+  <!-- ログイン項目に Kanmon の名前とアイコンで表示させる（macOS 13 以降） -->
+  <key>AssociatedBundleIdentifiers</key><array><string>io.github.zephel01.kanmon</string></array>
   <key>LimitLoadToSessionType</key><string>Aqua</string>
 </dict>
 </plist>

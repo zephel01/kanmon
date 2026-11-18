@@ -10,6 +10,11 @@ let package = Package(
         .executableTarget(
             name: "KanmonBar",
             path: "Sources/KanmonBar"
-        )
+        ),
+        .testTarget(
+            name: "KanmonBarTests",
+            dependencies: ["KanmonBar"],
+            path: "Tests/KanmonBarTests"
+        ),
     ]
 )

@@ -7,6 +7,7 @@
   <key>CFBundleIdentifier</key><string>io.github.zephel01.kanmon</string>
   <key>CFBundleExecutable</key><string>KanmonBar</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundleShortVersionString</key><string>__VERSION__</string>
   <key>CFBundleVersion</key><string>__VERSION__</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>

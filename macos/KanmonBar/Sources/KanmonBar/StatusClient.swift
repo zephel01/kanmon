@@ -34,13 +34,16 @@ enum StatusClient {
            let err = obj["error"] as? String {
             return .failure(.server(err))
         }
-        let dec = JSONDecoder()
-        dec.keyDecodingStrategy = .convertFromSnakeCase
         do {
-            return .success(try dec.decode(Snapshot.self, from: data))
+            return .success(try decodeSnapshot(data))
         } catch {
             return .failure(.decode(String(describing: error)))
         }
+    }
+
+    /// 状態の JSON を解釈する（テストからも使う）
+    static func decodeSnapshot(_ data: Data) throws -> Snapshot {
+        try JSONDecoder().decode(Snapshot.self, from: data)
     }
 
     private static func request(path: String, line: String) -> Result<Data, Failure> {
