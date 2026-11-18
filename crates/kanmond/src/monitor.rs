@@ -111,11 +111,11 @@ impl Monitor {
             Some(Err(e)) => return Err(e.context("検知ルールの読み込みに失敗")),
             None => DetectionSet::default(),
         };
-        eprintln!("kanmond: 検知ルール {} 件を読み込み（{}）", dets.detections.len(), cfg.detections_dir.display());
+        logln!("検知ルール {} 件を読み込み（{}）", dets.detections.len(), cfg.detections_dir.display());
         let rules = load_rules(&cfg, strict)?;
         let jsonl = JsonlWriter::open(&cfg.jsonl.path, cfg.jsonl.max_mb * 1024 * 1024, cfg.jsonl.keep)?;
         let intel = crate::feeds::load(&cfg);
-        eprintln!("kanmond: 脅威インテル {} 件", intel.len());
+        logln!("脅威インテル {} 件", intel.len());
         let host = cfg.host_name.clone().unwrap_or_else(hostname);
         let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
         let learning_until = (cfg.mode == "learning" && cfg.learning_days > 0)
@@ -150,8 +150,8 @@ impl Monitor {
         }
         if !cfg.status_socket.is_empty() {
             match crate::status::serve(Path::new(&cfg.status_socket), shared.clone(), cfg.status_allowed_uids.clone()) {
-                Ok(p) => eprintln!("kanmond: 状態ソケット {}", p.display()),
-                Err(e) => eprintln!("kanmond: 状態ソケットを開けません（監視は継続）: {e:#}"),
+                Ok(p) => logln!("状態ソケット {}", p.display()),
+                Err(e) => logln!("状態ソケットを開けません（監視は継続）: {e:#}"),
             }
         }
         let notifier = Notifier::new(&cfg.notify, Some(shared.clone()));
@@ -160,9 +160,9 @@ impl Monitor {
             let (tx, rx) = std::sync::mpsc::sync_channel(10_000);
             let devs = crate::capture::start(cfg.dns.interfaces.clone(), tx);
             if devs.is_empty() {
-                eprintln!("kanmond: DNS・SNI の観測を開始できませんでした（宛先は IP のみ）");
+                logln!("DNS・SNI の観測を開始できませんでした（宛先は IP のみ）");
             } else {
-                eprintln!("kanmond: DNS・SNI の観測: {}", devs.join(", "));
+                logln!("DNS・SNI の観測: {}", devs.join(", "));
             }
             Some(rx)
         } else {
@@ -234,7 +234,7 @@ impl Monitor {
     pub fn run(&mut self) -> Result<()> {
         loop {
             if let Err(e) = self.tick() {
-                eprintln!("kanmond: tick エラー: {e:#}");
+                logln!("tick エラー: {e:#}");
             }
             self.housekeeping();
             std::thread::sleep(Duration::from_millis(self.cfg.interval_ms));
@@ -270,14 +270,14 @@ impl Monitor {
             if let Some(r) = self.reloader.check() {
                 match r {
                     Ok(d) => {
-                        eprintln!("kanmond: 検知ルールを再読込（{} 件）", d.detections.len());
+                        logln!("検知ルールを再読込（{} 件）", d.detections.len());
                         let n = d.detections.len();
                         self.shared.update(|s| s.detections = n);
                         self.dets = d;
                     }
                     Err(e) => {
                         let msg = format!("検知ルールの再読込に失敗。前の設定を継続: {e:#}");
-                        eprintln!("kanmond: {msg}");
+                        logln!("{msg}");
                         self.notifier.send(
                             Message {
                                 level: Level::Warn,
@@ -295,10 +295,10 @@ impl Monitor {
                 self.rules_mtime = mt;
                 match load_rules(&self.cfg, self.cfg.strict_owner && is_root()) {
                     Ok(r) => {
-                        eprintln!("kanmond: 許可/拒否ルールを再読込（{} 件）", r.rules.len());
+                        logln!("許可/拒否ルールを再読込（{} 件）", r.rules.len());
                         self.rules = r;
                     }
-                    Err(e) => eprintln!("kanmond: rules 再読込失敗（前の設定を継続）: {e:#}"),
+                    Err(e) => logln!("rules 再読込失敗（前の設定を継続）: {e:#}"),
                 }
             }
         }
@@ -314,7 +314,7 @@ impl Monitor {
         }
         if self.intel_dirty.swap(false, Ordering::SeqCst) {
             self.intel = crate::feeds::load(&self.cfg);
-            eprintln!("kanmond: 脅威インテル {} 件", self.intel.len());
+            logln!("脅威インテル {} 件", self.intel.len());
             let n = self.intel.len();
             self.shared.update(|s| s.intel = n);
         }
@@ -322,7 +322,7 @@ impl Monitor {
         if self.last_beacon.elapsed() > Duration::from_secs(self.cfg.beacon_interval_s.max(5)) {
             self.last_beacon = Instant::now();
             if let Err(e) = self.beacon_batch() {
-                eprintln!("kanmond: beacon エラー: {e:#}");
+                logln!("beacon エラー: {e:#}");
             }
         }
         // 死活監視
@@ -697,7 +697,7 @@ impl Monitor {
             let _ = tx.send((name, passive, r));
         });
         if spawned.is_err() {
-            eprintln!("kanmond: DoH のスレッドを作れません");
+            logln!("DoH のスレッドを作れません");
         }
     }
 
@@ -753,7 +753,7 @@ impl Monitor {
                 Err(e) => {
                     if self.doh_fail_logged.is_none_or(|t| t.elapsed() > Duration::from_secs(3600)) {
                         self.doh_fail_logged = Some(Instant::now());
-                        eprintln!("kanmond: DoH での照合に失敗（{name}）: {e}");
+                        logln!("DoH での照合に失敗（{name}）: {e}");
                     }
                 }
             }
@@ -894,7 +894,7 @@ impl Monitor {
         let Ok(mut v) = serde_json::to_value(&e) else { return };
         let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);
         if let Err(err) = self.store.insert_event(&v, now).and_then(|_| self.jsonl.write(&v)) {
-            eprintln!("kanmond: DNS 検知イベントの保存に失敗: {err:#}");
+            logln!("DNS 検知イベントの保存に失敗: {err:#}");
         }
         if self.print {
             println!("{}", serde_json::to_string(&v).unwrap_or_default());

@@ -48,7 +48,7 @@ fn fetch_one(url: &str, dest: &Path) -> Result<usize> {
 pub fn refresh(cfg: &Config) {
     let dir = feed_dir(cfg);
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("kanmond: feeds dir: {e}");
+        logln!("feeds dir: {e}");
         return;
     }
     for f in cfg.feeds.iter().filter(|f| f.enabled) {
@@ -57,8 +57,8 @@ pub fn refresh(cfg: &Config) {
             continue;
         }
         match fetch_one(&f.url, &dest) {
-            Ok(n) => eprintln!("kanmond: feed {} 更新 ({n} 件)", f.name),
-            Err(e) => eprintln!("kanmond: feed {} 取得失敗（前回分を継続）: {e}", f.name),
+            Ok(n) => logln!("feed {} 更新 ({n} 件)", f.name),
+            Err(e) => logln!("feed {} 取得失敗（前回分を継続）: {e}", f.name),
         }
     }
 }
@@ -76,7 +76,7 @@ pub fn load(cfg: &Config) -> Intel {
         if cfg.strict_owner && unsafe { libc::geteuid() } == 0 {
             if let Err(e) = kanmon_core::detect::check_owner(p) {
                 if p.exists() {
-                    eprintln!("kanmond: 拒否リストを読みません: {e}");
+                    logln!("拒否リストを読みません: {e}");
                 }
                 continue;
             }

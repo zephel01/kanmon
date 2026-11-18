@@ -68,7 +68,7 @@ mod imp {
                 .open()?;
             cap.filter(FILTER, true)?;
             let Some(link) = Link::from_dlt(cap.get_datalink().0) else {
-                eprintln!("kanmond: {dev} のリンク種別 {:?} は未対応", cap.get_datalink());
+                logln!("{dev} のリンク種別 {:?} は未対応", cap.get_datalink());
                 return Ok(());
             };
             loop {
@@ -87,7 +87,7 @@ mod imp {
             }
         })();
         if let Err(e) = res {
-            eprintln!("kanmond: {dev} のパケット取得を終了: {e}");
+            logln!("{dev} のパケット取得を終了: {e}");
         }
         active.lock().map(|mut a| a.remove(&dev)).ok();
     }
@@ -116,7 +116,7 @@ mod imp {
         // フィルタが通るか先に確かめる（libpcap の版による差を早めに出す）
         if let Ok(dead) = pcap::Capture::dead(pcap::Linktype::ETHERNET) {
             if let Err(e) = dead.compile(FILTER, true) {
-                eprintln!("kanmond: BPF フィルタを解釈できません（名前付けを無効化）: {e}");
+                logln!("BPF フィルタを解釈できません（名前付けを無効化）: {e}");
                 return vec![];
             }
         }
@@ -151,7 +151,7 @@ mod imp {
                 std::thread::sleep(Duration::from_secs(60));
                 let s = spawn_new();
                 if !s.is_empty() {
-                    eprintln!("kanmond: パケット取得を追加: {}", s.join(", "));
+                    logln!("パケット取得を追加: {}", s.join(", "));
                 }
             });
         }
@@ -164,7 +164,7 @@ pub use imp::start;
 
 #[cfg(not(feature = "capture"))]
 pub fn start(_cfg_ifaces: Vec<String>, _tx: SyncSender<Obs>) -> Vec<String> {
-    eprintln!("kanmond: capture 機能なしでビルドされています（宛先の名前付けは無効）");
+    logln!("capture 機能なしでビルドされています（宛先の名前付けは無効）");
     vec![]
 }
 

@@ -60,9 +60,14 @@ fn strs(v: &Value, p: &str) -> Vec<String> {
 /// DNS の改ざん検知イベントの文面
 fn dns_text(v: &Value, level: &str, score: i64) -> (String, String) {
     let f = s(v, "kanmon.dns.finding").unwrap_or("?");
+    // v0.2.0 の N3 は証明書を確かめていない（DoH と食い違っただけ）。見出しを分ける
+    let label = if f == "crosscheck_mismatch" && strs(v, "kanmon.dns.tls").is_empty() {
+        "暗号化 DNS の答えと合わない"
+    } else {
+        finding_label(f)
+    };
     let subject = s(v, "dns.question.name").or_else(|| s(v, "file.path")).unwrap_or("");
-    let title =
-        format!("kanmon {} {}点: {} {}", level.to_uppercase(), score, finding_label(f), subject).trim_end().to_string();
+    let title = format!("kanmon {} {}点: {} {}", level.to_uppercase(), score, label, subject).trim_end().to_string();
     let mut lines = vec![format!("【理由】合計 {score} 点（{level}）")];
     if let Some(sigs) = get_path(v, "kanmon.signals").and_then(|x| x.as_array()) {
         for h in sigs {
@@ -71,7 +76,7 @@ fn dns_text(v: &Value, level: &str, score: i64) -> (String, String) {
         }
     }
     lines.push(String::new());
-    lines.push(format!("【内容】{}", finding_label(f)));
+    lines.push(format!("【内容】{label}"));
     if let Some(p) = s(v, "file.path") {
         lines.push(format!("  ファイル: {p}"));
     }
@@ -251,5 +256,13 @@ mod tests {
         let (t, b) = alert_text(&v);
         assert_eq!(t, "kanmon CRITICAL 140点: hosts が書き換えられた /etc/hosts");
         assert!(b.contains("追加: 203.0.113.66 registry.npmjs.org"), "{b}");
+        // 証明書の確認が無い古い N3 は、元の見出しのまま
+        let old = json!({"network": {"kind": "dns_integrity"}, "dns": {"question": {"name": "github.com"}},
+                         "kanmon": {"level": "notice", "score": 40, "dns": {"finding": "crosscheck_mismatch"}}});
+        assert!(alert_text(&old).0.contains("暗号化 DNS の答えと合わない"));
+        let new = json!({"network": {"kind": "dns_integrity"}, "dns": {"question": {"name": "github.com"}},
+                         "kanmon": {"level": "warn", "score": 70,
+                                    "dns": {"finding": "crosscheck_mismatch", "tls": ["203.0.113.5: 証明書の検証に失敗（x）"]}}});
+        assert!(alert_text(&new).0.contains("正しい証明書を出さない"));
     }
 }

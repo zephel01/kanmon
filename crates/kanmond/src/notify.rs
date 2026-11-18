@@ -53,7 +53,7 @@ impl Notifier {
                     }
                     if !cfg2.ntfy_url.is_empty() && !cfg2.ntfy_topic.is_empty() {
                         if let Err(e) = ntfy(&cfg2, &m) {
-                            eprintln!("kanmond: ntfy 送信失敗: {e}");
+                            logln!("ntfy 送信失敗: {e}");
                         }
                     }
                 }
@@ -111,7 +111,7 @@ fn ntfy(cfg: &NotifyCfg, m: &Message) -> anyhow::Result<()> {
 
 pub fn heartbeat(url: &str) {
     if let Err(e) = ureq::get(url).timeout(Duration::from_secs(10)).call() {
-        eprintln!("kanmond: heartbeat 失敗: {e}");
+        logln!("heartbeat 失敗: {e}");
     }
 }
 
@@ -168,7 +168,7 @@ impl Local {
         let short: String = m.body.lines().take(4).collect::<Vec<_>>().join("\n");
         let banner = ["on run argv", "display notification (item 1 of argv) with title (item 2 of argv)", "end run"];
         if let Err(e) = Self::osascript(&osascript_args(&banner, &[&short, &m.title])).output() {
-            eprintln!("kanmond: 通知失敗: {e}");
+            logln!("通知失敗: {e}");
         }
         if !alert {
             return;
@@ -176,14 +176,14 @@ impl Local {
         // 閉じたダイアログを回収
         self.dialogs.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
         if self.dialogs.len() >= Self::MAX_DIALOGS {
-            eprintln!("kanmond: ダイアログが {} 件表示中のため、バナーのみ", self.dialogs.len());
+            logln!("ダイアログが {} 件表示中のため、バナーのみ", self.dialogs.len());
             return;
         }
         let t = timeout_s.max(5).to_string();
         let args = osascript_args(&alert_script(m.level >= Level::Critical), &[&m.title, &m.body, &t]);
         match Self::osascript(&args).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() {
             Ok(c) => self.dialogs.push(c),
-            Err(e) => eprintln!("kanmond: ダイアログ表示失敗: {e}"),
+            Err(e) => logln!("ダイアログ表示失敗: {e}"),
         }
     }
 }
