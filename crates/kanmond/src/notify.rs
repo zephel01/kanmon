@@ -1,4 +1,4 @@
-//! 通知：OS ローカル通知と ntfy、死活監視ハートビート。
+//! 通知：OS ローカル通知・ntfy・Webhook（汎用 JSON / Slack / Discord）、死活監視ハートビート。
 //! 送信は別スレッドで行い、監視ループを止めない。外部へは「情報のみ」（遠隔で許可する機能は持たない）。
 //!
 //! `alert_level` 以上は消えない表示にする：
@@ -42,6 +42,13 @@ impl Notifier {
         let (tx, rx) = channel::<Message>();
         let cfg2 = cfg.clone();
         let alert_level = Level::parse(&cfg.alert_level).unwrap_or(Level::Warn);
+        let base_min = Level::parse(&cfg.min_level).unwrap_or(Level::Notice);
+        let host = crate::monitor::hostname();
+        for w in &cfg.webhooks {
+            if let Err(e) = check_webhook(w) {
+                logln!("Webhook の設定を使いません（{}）: {e}", redact_url(&w.url));
+            }
+        }
         std::thread::Builder::new()
             .name("notify".into())
             .spawn(move || {
@@ -54,6 +61,16 @@ impl Notifier {
                     if !cfg2.ntfy_url.is_empty() && !cfg2.ntfy_topic.is_empty() {
                         if let Err(e) = ntfy(&cfg2, &m) {
                             logln!("ntfy 送信失敗: {e}");
+                        }
+                    }
+                    for w in &cfg2.webhooks {
+                        let min = w.min_level.as_deref().and_then(Level::parse).unwrap_or(base_min);
+                        if m.level < min {
+                            continue;
+                        }
+                        let host = if w.include_host { Some(host.as_str()) } else { None };
+                        if let Err(e) = webhook(w, &m, host) {
+                            logln!("Webhook 送信失敗（{}）: {e}", redact_url(&w.url));
                         }
                     }
                 }
@@ -107,6 +124,106 @@ fn ntfy(cfg: &NotifyCfg, m: &Message) -> anyhow::Result<()> {
     }
     req.send_json(body)?;
     Ok(())
+}
+
+/// Webhook の設定を確かめる：https（ループバックのみ http 可）、形式
+pub fn check_webhook(w: &crate::config::WebhookCfg) -> anyhow::Result<()> {
+    if !matches!(w.format.as_str(), "json" | "slack" | "discord") {
+        anyhow::bail!("format は json / slack / discord のどれか");
+    }
+    let u = w.url.as_str();
+    let host_of = |rest: &str| rest.split(['/', '?', '#']).next().unwrap_or("").to_string();
+    if let Some(rest) = u.strip_prefix("https://") {
+        if host_of(rest).is_empty() {
+            anyhow::bail!("URL にホストがない");
+        }
+        return Ok(());
+    }
+    if let Some(rest) = u.strip_prefix("http://") {
+        let h = host_of(rest);
+        let name = h.rsplit_once(':').map(|(a, _)| a).unwrap_or(&h);
+        if matches!(name, "127.0.0.1" | "localhost" | "[::1]") {
+            return Ok(());
+        }
+    }
+    anyhow::bail!("https の URL だけを使う（ループバックだけは http 可）")
+}
+
+/// ログに出すための URL（パスとクエリは伏せる。Slack・Discord の URL は秘密の鍵を含む）
+pub fn redact_url(u: &str) -> String {
+    match u.split_once("://") {
+        Some((s, rest)) => format!("{s}://{}/…", rest.split(['/', '?', '#']).next().unwrap_or("")),
+        None => "(不正な URL)".into(),
+    }
+}
+
+/// Slack の mrkdwn の制御文字を逃がす（`<!channel>` 等の一斉通知やリンクの偽装を防ぐ）
+fn slack_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+fn clip_chars(s: &str, n: usize) -> String {
+    if s.chars().count() > n {
+        format!("{}…", s.chars().take(n).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
+/// 送る JSON を作る（純関数。通知の本文はプロセス名・ドメイン等、外から来た文字列を含むので、
+/// Slack は制御文字を逃がし、Discord は一斉通知（@everyone 等）を無効にする）
+pub fn webhook_payload(format: &str, m: &Message, host: Option<&str>) -> serde_json::Value {
+    let level = m.level.as_str();
+    match format {
+        "slack" => serde_json::json!({
+            "text": clip_chars(&format!(
+                "*[kanmon {level}] {}*{}\n{}",
+                slack_escape(&m.title),
+                host.map(|h| format!("（{}）", slack_escape(h))).unwrap_or_default(),
+                slack_escape(&m.body)
+            ), 3500),
+        }),
+        "discord" => serde_json::json!({
+            "content": clip_chars(&format!(
+                "**[kanmon {level}] {}**{}\n{}",
+                m.title,
+                host.map(|h| format!("（{h}）")).unwrap_or_default(),
+                m.body
+            ), 1900),
+            "allowed_mentions": { "parse": [] },
+        }),
+        _ => {
+            let mut v = serde_json::json!({
+                "source": "kanmon",
+                "level": level,
+                "title": m.title,
+                "body": clip_chars(&m.body, 8000),
+                "time": chrono::Utc::now().to_rfc3339(),
+            });
+            if let Some(h) = host {
+                v["host"] = serde_json::json!(h);
+            }
+            v
+        }
+    }
+}
+
+fn webhook(w: &crate::config::WebhookCfg, m: &Message, host: Option<&str>) -> anyhow::Result<()> {
+    check_webhook(w)?;
+    let body = webhook_payload(&w.format, m, host);
+    let mut last = None;
+    for _ in 0..2 {
+        let mut req = ureq::post(&w.url).timeout(Duration::from_secs(10));
+        if !w.token.is_empty() && w.format == "json" {
+            req = req.set("Authorization", &format!("Bearer {}", w.token));
+        }
+        match req.send_json(body.clone()) {
+            Ok(_) => return Ok(()),
+            Err(e) => last = Some(e),
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    Err(anyhow::anyhow!("{}", last.map(|e| e.to_string()).unwrap_or_default()))
 }
 
 pub fn heartbeat(url: &str) {
@@ -238,6 +355,50 @@ impl Local {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::WebhookCfg;
+
+    fn wh(url: &str, format: &str) -> WebhookCfg {
+        WebhookCfg {
+            url: url.into(),
+            format: format.into(),
+            min_level: None,
+            include_host: false,
+            token: String::new(),
+        }
+    }
+
+    #[test]
+    fn webhook_urls() {
+        assert!(check_webhook(&wh("https://hooks.slack.com/services/T/B/x", "slack")).is_ok());
+        assert!(check_webhook(&wh("http://127.0.0.1:18091/hook", "json")).is_ok());
+        assert!(check_webhook(&wh("http://localhost/hook", "json")).is_ok());
+        assert!(check_webhook(&wh("http://203.0.113.9/hook", "json")).is_err());
+        assert!(check_webhook(&wh("ftp://x", "json")).is_err());
+        assert!(check_webhook(&wh("https://x/y", "teams")).is_err());
+        assert_eq!(redact_url("https://hooks.slack.com/services/T/B/secret?x=1"), "https://hooks.slack.com/…");
+    }
+
+    #[test]
+    fn webhook_payloads_neutralize_mentions() {
+        let m = Message {
+            level: Level::Critical,
+            title: "<!channel> evil".into(),
+            body: "@everyone process <https://203.0.113.9|click> & more".into(),
+            dedup_key: "k".into(),
+        };
+        let s = webhook_payload("slack", &m, Some("host1"));
+        let t = s["text"].as_str().unwrap();
+        assert!(!t.contains("<!channel>") && !t.contains("<https://") && t.contains("&lt;!channel&gt;"), "{t}");
+        assert!(t.contains("host1"));
+        let d = webhook_payload("discord", &m, None);
+        assert_eq!(d["allowed_mentions"]["parse"], serde_json::json!([]));
+        assert!(!d["content"].as_str().unwrap().contains("host1"));
+        let j = webhook_payload("json", &m, None);
+        assert_eq!(j["level"], "critical");
+        assert!(j.get("host").is_none());
+        let long = Message { body: "あ".repeat(5000), ..m };
+        assert!(webhook_payload("discord", &long, None)["content"].as_str().unwrap().chars().count() <= 1901);
+    }
 
     #[test]
     fn osascript_args_keep_text_out_of_script() {

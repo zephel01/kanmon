@@ -43,6 +43,13 @@ local = false
 min_level = "notice"
 ntfy_url = "http://127.0.0.1:18090"
 ntfy_topic = "kanmon-harness"
+[[notify.webhooks]]
+url = "http://127.0.0.1:18090/hook"
+format = "json"
+min_level = "warn"
+[[notify.webhooks]]
+url = "http://203.0.113.9/hook"
+format = "json"
 [dns]
 hosts_path = "$W/hosts"
 resolv_conf = ["$W/resolv.conf"]
@@ -271,6 +278,11 @@ except FileNotFoundError:
     n = []
 check("ntfy に通知が届いた（critical を含む）", any(x.get("priority") == 5 for x in n))
 check("通知本文に理由の説明が入っている", any("脅威インテル（既知の悪性" in x.get("message","") for x in n))
+wh = [x for x in n if x.get("source") == "kanmon"]
+check("P: Webhook（汎用 JSON）に warn 以上だけが届く、ホスト名は入らない",
+      wh and all(x["level"] in ("warn", "critical") for x in wh) and all("host" not in x for x in wh))
+log = open(sys.argv[1].replace("events.jsonl", "kanmond.log"), errors="replace").read()
+check("P: http のインターネット宛て Webhook は使わない（設定を拒否してログに出す）", "Webhook の設定を使いません（http://203.0.113.9/…）" in log)
 st = json.load(open(sys.argv[1].replace("events.jsonl", "status.json")))
 check("F: 状態ソケットが critical の警告を返す", any(a["level"] == "critical" for a in st.get("alerts", [])) and st.get("version"))
 g = find(lambda e: e["network"]["kind"] == "listen" and e.get("source",{}).get("port") == 8888)

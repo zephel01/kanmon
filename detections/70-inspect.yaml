@@ -63,3 +63,29 @@ detections:
       all:
         - { field: kanmon.inspect.features, op: in, value: [burst_release] }
         - { field: kanmon.inspect.features, op: in, value: [pth_exec, install_script, new_top_level] }
+
+  - { id: I21, name: drop_exec, points: 25, kinds: [inspect], description: "復号した中身をファイルに書いて実行する（base64 に隠した本体）", when: { field: kanmon.inspect.features, op: in, value: [drop_exec] } }
+  - { id: I22, name: import_time_exec, points: 20, kinds: [inspect], description: "パッケージを読み込む（import）だけで、取得や外部コマンドの起動が走る（__init__.py）", when: { field: kanmon.inspect.features, op: in, value: [import_time_exec] } }
+
+  - id: IC5
+    name: import_and_stage2
+    points: 30
+    description: 読み込むだけで、別の中身を取って（または復号して）動かす
+    kinds: [inspect]
+    when:
+      all:
+        - { field: kanmon.inspect.features, op: in, value: [import_time_exec, pth_exec, install_script] }
+        - { field: kanmon.inspect.features, op: in, value: [download_exec, drop_exec] }
+  - { id: I23, name: dep_from_url, points: 30, kinds: [inspect], description: "レジストリ以外（GitHub のコミット・URL・ファイル）から取る依存が増えた（本体を別の場所に置く手口）", when: { field: kanmon.inspect.features, op: in, value: [dep_from_url] } }
+
+  - id: IC6
+    name: obfuscated_with_trigger
+    points: 30
+    description: 難読化した中身と、それを動かす仕掛け（導入時のスクリプト・外から取る依存・新しいトップレベル）がそろっている
+    kinds: [inspect]
+    when:
+      all:
+        - { field: kanmon.inspect.features, op: in, value: [obfuscation] }
+        - { field: kanmon.inspect.features, op: in, value: [install_script, dep_from_url, new_top_level, pth_exec] }
+  - { id: I24, name: new_dependency, points: 5, kinds: [inspect], description: "依存が増えた", when: { field: kanmon.inspect.features, op: in, value: [new_dependency] } }
+  - { id: I25, name: new_dep_young, points: 55, kinds: [inspect], description: "増えた依存が、出来たばかり（30 日以内）か、レジストリに無い（本体を依存に置く手口）", when: { field: kanmon.inspect.features, op: in, value: [new_dep_young] } }

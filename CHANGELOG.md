@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-19
+`kanmonctl inspect` を実物の悪性パッケージで評価して見方を足した。Webhook での通知。
+
+### 追加
+- **inspect の新しい特徴**（I21〜I25・IC5・IC6）：コードの中から取って置いて動かす形（Python の別名の import を含む）、復号して書いて動かす形、`__init__.py`・`setup.py`・`.pth` での読み込み・導入時の実行、GitHub のコミット・URL から取る依存、出来たばかり（30 日以内）かレジストリに無い依存、`binding.gyp` のコマンド展開、大量の空白で隠したコード、隠した PowerShell（UTF-16 の base64 も復号）
+- `kanmonctl inspect --check-deps`（`--file` でも依存を調べる）、`--as-of`（その時点で調べたことにする）
+- **Webhook**（`[[notify.webhooks]]`）：汎用 JSON・Slack・Discord。https のみ（ループバックだけ http 可）。本文の外から来た文字列で一斉通知・リンクの偽装をさせない。ホスト名は既定で入れない
+- 評価の結果を `docs/inspect.md` に記録（DataDog の悪性パッケージのデータセット、良性 100 件）
+
+### 修正
+- inspect の誤検知：ブラウザ向けの配布物（`_next/static` 等）を見ていた、`||sh…` をシェルへのパイプとしていた、`huggingface/tokenizers` を認証ファイルとしていた、JS の `.get(`・`.exec(` だけで取得・起動としていた
+
 ### 文書
 - 設計書に §10.4「遮断で守る約束」を追加（TLS を開けない・応答を溜めない・ループバックと LAN は既定で止めない・例外は全検査から外す・理由と「今回だけ許可」を出す・新しいルールはまず記録だけ）。第2弾の引き継ぎ（HANDOFF.md）に確認項目を追加
 

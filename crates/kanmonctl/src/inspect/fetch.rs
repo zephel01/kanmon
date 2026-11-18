@@ -318,6 +318,34 @@ pub fn resolve(f: &dyn Fetcher, eco: Ecosystem, name: &str, ver: Option<&str>, b
     }
 }
 
+/// 依存のパッケージが初めて公開された時刻（UNIX 秒）。レジストリに無ければ None
+pub fn first_published(f: &dyn Fetcher, eco: Ecosystem, name: &str) -> Result<Option<i64>> {
+    if !valid_name(eco, name) {
+        bail!("パッケージ名の形が正しくありません");
+    }
+    let url = match eco {
+        Ecosystem::Pypi => format!("https://pypi.org/pypi/{name}/json"),
+        Ecosystem::Npm => format!("https://registry.npmjs.org/{}", name.replacen('/', "%2f", 1)),
+    };
+    let body = match f.get(&url, 128 * 1024 * 1024) {
+        Ok(b) => b,
+        Err(e) if e.to_string().contains("HTTP 404") => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let v: Value = serde_json::from_slice(&body).context("レジストリの応答を JSON として読めません")?;
+    let t = match eco {
+        Ecosystem::Npm => v["time"]["created"].as_str().and_then(ts),
+        Ecosystem::Pypi => v["releases"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, fs)| fs.as_array().into_iter().flatten())
+            .filter_map(|x| x["upload_time_iso_8601"].as_str().and_then(ts))
+            .min(),
+    };
+    Ok(t)
+}
+
 /// 取得してハッシュを照合する
 pub fn download(f: &dyn Fetcher, a: &Artifact, max: u64) -> Result<Vec<u8>> {
     if !allowed_url(&a.url) {
@@ -453,6 +481,34 @@ mod tests {
         // 古い系列の保守版を調べるときは、その系列の前の版
         let times = vec![t("6.4.5", 5), t("8.3.7", 10), t("6.4.6", 20)];
         assert_eq!(pick_base(Ecosystem::Npm, "6.4.6", &times).as_deref(), Some("6.4.5"));
+    }
+
+    #[test]
+    fn first_published_lookup() {
+        struct F404;
+        impl Fetcher for F404 {
+            fn get(&self, _: &str, _: u64) -> Result<Vec<u8>> {
+                bail!("HTTP 404: x")
+            }
+        }
+        assert_eq!(first_published(&F404, Ecosystem::Npm, "easy-day-js").unwrap(), None);
+        let mut m = HashMap::new();
+        m.insert(
+            "https://registry.npmjs.org/@s%2fp".to_string(),
+            serde_json::to_vec(&serde_json::json!({"time": {"created": "2026-11-01T00:00:00Z"}})).unwrap(),
+        );
+        m.insert(
+            "https://pypi.org/pypi/evil-pkg/json".to_string(),
+            serde_json::to_vec(
+                &serde_json::json!({"releases": {"0.1": [{"upload_time_iso_8601": "2026-11-10T00:00:00Z"}],
+                "0.2": [{"upload_time_iso_8601": "2026-11-12T00:00:00Z"}]}}),
+            )
+            .unwrap(),
+        );
+        let f = Fake(m);
+        assert_eq!(first_published(&f, Ecosystem::Npm, "@s/p").unwrap(), ts("2026-11-01T00:00:00Z"));
+        assert_eq!(first_published(&f, Ecosystem::Pypi, "evil-pkg").unwrap(), ts("2026-11-10T00:00:00Z"));
+        assert!(first_published(&f, Ecosystem::Npm, "../x").is_err());
     }
 
     #[test]

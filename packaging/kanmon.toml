@@ -60,6 +60,13 @@ alert_timeout_s = 600
 # メニューバーアプリ（Kanmon.app）が動いている間は、ダイアログ・バナーをアプリに任せる
 defer_to_app = true
 
+# Webhook（複数書ける）。format は json（汎用）/ slack / discord。https のみ。ホスト名は既定で入れない
+# [[notify.webhooks]]
+# url = "https://hooks.slack.com/services/…"
+# format = "slack"
+# min_level = "warn"
+# include_host = false
+
 [[feeds]]
 name = "feodo"
 url = "https://feodotracker.abuse.ch/downloads/ipblocklist.txt"

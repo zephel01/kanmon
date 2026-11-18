@@ -11,6 +11,8 @@ kanmonctl inspect --file new.whl --base-file old.whl --detections …   # 手元
 ```
 - 版を省くと最新版を調べます。
 - `--json` で機械可読の出力、`--all` で所見をすべて表示します（既定は特徴ごとに 3 件まで）。
+- 新しく増えた依存は、レジストリで初公開の日を調べます（パッケージ指定のときは常に。`--file` では `--check-deps` を付けたとき）。
+- `--as-of 2026-06-16` で「その時点で調べたことにする」（過去の事件の振り返り用。「出来たばかりの依存」「公開から日が浅い」の基準が変わる）。
 - 終了コード：0 = warn 未満、2 = warn、3 = critical、1 = 実行エラー（取得できない・ハッシュが合わない・指定の形が正しくない）。
 
 ## 位置づけ
@@ -57,6 +59,13 @@ kanmonctl inspect --file new.whl --base-file old.whl --detections …   # 手元
 | `burst_release` | I18 | 前の版から 2 時間以内の公開 | +10 |
 | `publisher_changed` | I19 | 公開した人が前の版と違う（npm） | +15 |
 | `attestation_dropped` | I20 | 前の版にあった証明（attestation）が無い（npm） | +20 |
+| `drop_exec` | I21 | base64 を復号してファイルに書き、実行する | +25 |
+| `import_time_exec` | I22 | `__init__.py`・`setup.py` の読み込み・導入だけで取得・外部コマンドの起動が走る、`.pth` の 1 行に `exec` 等を詰める | +20 |
+| `dep_from_url` | I23 | GitHub のコミット・URL・ファイルから取る依存が増えた | +30 |
+| `new_dependency` | I24 | 依存が増えた | +5 |
+| `new_dep_young` | I25 | 増えた依存が、初公開から 30 日以内か、レジストリに無い。本体と同じ「家族」（`typescript` と `@typescript/…`）は除く | +55 |
+
+`download_exec` は、シェルの `curl … \| sh` のほか、コードの中から取って（urllib・requests・`https.get`・外部コマンドの curl）、置いて（`/tmp`・tempfile・ファイル書き込み）、動かす（subprocess・child_process）形も拾う。Python は別名の import（`import subprocess as _s`）にも対応する。`obfuscation` には、大量の空白で行の右端の外へ押し出したコード、`eval(function(` の詰め込み、隠した PowerShell（`-EncodedCommand`・`-WindowStyle Hidden`。UTF-16 の base64 も復号して中の URL を見る）も含む。`binding.gyp` のコマンド展開（`<!(…)`）は導入時のスクリプトとして扱う。
 
 組み合わせ：
 
@@ -66,6 +75,8 @@ kanmonctl inspect --file new.whl --base-file old.whl --detections …   # 手元
 | IC2 | `env_harvest` か `cred_paths` と、`exfil_host`・`hidden_url`・`chain_rpc`・`raw_ip_url` のどれか | +30 |
 | IC3 | `detach` と `env_harvest` | +15 |
 | IC4 | `burst_release` と、`pth_exec`・`install_script`・`new_top_level` のどれか | +15 |
+| IC5 | `import_time_exec`・`pth_exec`・`install_script` のどれかと、`download_exec`・`drop_exec` のどれか | +30 |
+| IC6 | `obfuscation` と、`install_script`・`dep_from_url`・`new_top_level`・`pth_exec` のどれか | +30 |
 
 手口をまねた合成のサンプルでの点数：agent-framework 型（.pth・新しいトップレベル・環境変数・認証ファイル・切り離し・隠した URL）は critical、keyv 型（preinstall・実行ファイルの取得・RPC・認証ファイル・難読化）は critical、良性の更新は 0〜5 点です。
 
@@ -84,6 +95,29 @@ kanmonctl inspect --file new.whl --base-file old.whl --detections …   # 手元
 - **バイナリの大きさを上限超えとしていた**：numpy の共有ライブラリ（20 MiB 超）。コード・テキストだけにした
 
 残っている軽い所見：vite の生成コードに埋め込まれた base64（I5、20 点）、TypeScript のメジャー更新での入口の変更と公開者の違い（I4・I19、25 点）。どちらも単独では通知になりません。
+
+## 実物の悪性パッケージでの評価（2026-11-19）
+DataDog Security Labs の [Malicious Software Packages Dataset](https://github.com/DataDog/malicious-software-packages-dataset)（Apache-2.0。実際に見つかった悪性パッケージを人が確認したもの）で測った。
+
+- 隔離したクラウドの Linux 環境で、パスワード付きの zip をメモリ上で開いて `--file` で渡しただけ。実行・インストール・import はしていない。サンプルはリポジトリにも成果物にも入れていない。
+- 乗っ取り型（compromised_lib）は、レジストリに残っている正規の前の版と比べた。見つかった日を `--as-of` に渡し、その時点で調べたことにした。
+- 1 パッケージにつき 1 版を無作為に選んだ。数字は warn 以上になった割合（通知が「警告」以上で出る割合）。
+
+| 組 | 件数 | warn 以上（直す前 → 後） |
+|---|---|---|
+| PyPI・乗っ取り型（全件） | 16 | 5 → 14 |
+| npm・乗っ取り型（調整に使った 150） | 148 | 109 → 120 |
+| npm・乗っ取り型（別の 150。初回は手を付けていない組） | 149 | 118 → 140 |
+| PyPI・悪意あり型（新規の悪性パッケージ） | 99 | 30 → 58 |
+| npm・悪意あり型 | 100 | 28 → 28 |
+| 良性の人気パッケージ 100（最新の更新） | 99 | warn 以上 0、notice 3（typescript・vitest・keyv） |
+
+読み方の注意：
+- 直した後の数字は、取りこぼしを見ながらルールを直した組なので甘めに出ている。手を付けていない組での最初の数字（npm 乗っ取り型 79%）が実力に近い。別の 150 の「後」は、その組の取りこぼし（出来たばかりの依存を足すだけの @mastra 型）を見て直したあとの数字。
+- 悪意あり型は前の版が無く、全ファイルを見る判定。npm の悪意あり型には、中身が package.json だけのものや、Next.js の雛形をそのまま上げた迷惑パッケージが多く、静的に見て分かるものが少ない（23 件は特徴が 1 つも出ない）。inspect の得意は「正規パッケージの更新に増えた部分」で、新規の悪性パッケージは入れる前の防御（レジストリ側の検査・クールダウン）と kanmond の通信の監視に任せる。
+- データセットの形が崩れていて評価できないサンプルがあった（PyPI の ultralytics 8.3.41・num2words 0.5.15・xinference 2.6.1）。
+
+取りこぼしから足したもの（v0.3.1）：コードの中から取って置いて動かす形（別名の import を含む）、復号して書いて動かす形、`__init__.py`・`setup.py`・`.pth` で読み込み・導入時に動く形、GitHub のコミットから取る依存、出来たばかりの依存、`binding.gyp` のコマンド展開、大量の空白で隠したコード、隠した PowerShell。
 
 ## 限界
 - 静的に読むだけなので、実行時に組み立てる処理（文字列の連結で URL を作る、別のサーバーから本体を取る）は見えにくい。取ってくる処理そのもの（`download_exec`・`chain_rpc`・`hidden_url`）で拾う

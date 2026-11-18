@@ -171,6 +171,6 @@ detections:
 監視リスト（`dns.watch_domains`）の既定値は、パッケージ配布元（npm・PyPI・crates.io 等）、GitHub、Hugging Face、AI ベンダーの API、主要なログイン画面です。
 
 ### パッケージの更新の検査（`70-inspect.yaml`）
-イベントの `network.kind` は `inspect`。`kanmonctl inspect` が作り、特徴（I1〜I20）と組み合わせ（IC1〜IC4）で点数を付ける。一覧と点数は [docs/inspect.md](inspect.md)。
+イベントの `network.kind` は `inspect`。`kanmonctl inspect` が作り、特徴（I1〜I25）と組み合わせ（IC1〜IC6）で点数を付ける。一覧と点数は [docs/inspect.md](inspect.md)。
 
 検知ルールを変えたら、`tests/fixtures/replay-cases.jsonl` に期待値を足してください。`cargo test` が回帰を検出します。
