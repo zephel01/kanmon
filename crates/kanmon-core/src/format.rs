@@ -7,8 +7,9 @@ fn s<'a>(v: &'a Value, p: &str) -> Option<&'a str> {
     get_path(v, p).and_then(|x| x.as_str()).filter(|x| !x.is_empty())
 }
 
+/// パスの最後の部品。Windows のパス・レジストリのキー（`\` 区切り）にも使う
 fn basename(p: &str) -> &str {
-    p.rsplit('/').next().unwrap_or(p)
+    p.rsplit(['/', '\\']).next().unwrap_or(p)
 }
 
 fn sig_label(status: &str) -> &str {
@@ -115,7 +116,14 @@ fn dns_text(v: &Value, level: &str, score: i64) -> (String, String) {
     (title, lines.join("\n"))
 }
 
-fn persist_kind_label(k: &str) -> &str {
+/// 居座りの種類の名前。自動起動は OS（イベントの host.os）に合わせて例を変える
+fn persist_kind_label<'a>(k: &'a str, os: Option<&str>) -> &'a str {
+    match (k, os) {
+        ("autostart", Some("windows")) => return "自動起動（Run キー・スタートアップ・タスク・サービス 等）",
+        ("autostart", Some("macos")) => return "自動起動（LaunchAgents・LaunchDaemons 等）",
+        ("autostart", Some("linux")) => return "自動起動（systemd・autostart 等）",
+        _ => {}
+    }
     match k {
         "claude_hook" => "Claude Code のフック",
         "vscode_folderopen" => "VS Code の自動実行タスク（folderOpen）",
@@ -146,7 +154,7 @@ fn persist_text(v: &Value, level: &str, score: i64) -> (String, String) {
         "kanmon {} {}点: {}の{} {}",
         level.to_uppercase(),
         score,
-        persist_kind_label(k),
+        persist_kind_label(k, s(v, "host.os")),
         change_label(c),
         basename(path)
     );
@@ -158,8 +166,10 @@ fn persist_text(v: &Value, level: &str, score: i64) -> (String, String) {
         }
     }
     lines.push(String::new());
-    lines.push(format!("【内容】{}の{}", persist_kind_label(k), change_label(c)));
-    lines.push(format!("  ファイル: {path}"));
+    lines.push(format!("【内容】{}の{}", persist_kind_label(k, s(v, "host.os")), change_label(c)));
+    // Windows のレジストリ（HKLM・HKU 等）はファイルではないので「場所」と書く
+    let place = if path.starts_with("HK") { "場所" } else { "ファイル" };
+    lines.push(format!("  {place}: {path}"));
     if let Some(d) = s(v, "kanmon.persist.detail") {
         lines.push(format!("  中身: {d}"));
     }
@@ -338,6 +348,23 @@ mod tests {
         let (t, b) = alert_text(&v);
         assert_eq!(t, "kanmon WARN 80点: Claude Code のフックの追加 settings.json");
         assert!(b.contains("怪しい特徴: network, pipe_shell"), "{b}");
+    }
+
+    #[test]
+    fn persistence_text_windows() {
+        let v = json!({"host": {"os": "windows"}, "network": {"kind": "persistence"},
+                       "file": {"path": "HKU\\S-1-5-21-1\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\kanmon-test"},
+                       "kanmon": {"level": "notice", "score": 30,
+                                  "persist": {"kind": "autostart", "change": "added", "detail": "kanmon-test → notepad.exe"}}});
+        let (t, _) = alert_text(&v);
+        assert_eq!(
+            t,
+            "kanmon NOTICE 30点: 自動起動（Run キー・スタートアップ・タスク・サービス 等）の追加 kanmon-test"
+        );
+        // OS が分からない古いイベントは従来の文言
+        let mut old = v.clone();
+        old.as_object_mut().unwrap().remove("host");
+        assert!(alert_text(&old).0.contains("自動起動（LaunchAgents・systemd 等）"));
     }
 
     #[test]

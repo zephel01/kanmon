@@ -249,7 +249,8 @@ mod win {
                         for a in model.update(s, paused) {
                             toast(&a.title, &a.body);
                         }
-                        header.set_text(model::clean(&format!("kanmon {}（{}）", s.version, s.host), 60));
+                        // ホスト名は出さない（動作報告のスクリーンショットに写らないように）
+                        header.set_text(model::clean(&format!("kanmon {}", s.version), 60));
                         // 直近の警告を作り直す（変わったときだけ）
                         let ids: Vec<&str> = s.alerts.iter().take(MAX_ITEMS).map(|a| a.id.as_str()).collect();
                         let cur: Vec<&str> = items.iter().map(|(_, a)| a.id.as_str()).collect();

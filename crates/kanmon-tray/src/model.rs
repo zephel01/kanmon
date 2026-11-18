@@ -30,8 +30,6 @@ pub struct Status {
     #[serde(default)]
     pub version: String,
     #[serde(default)]
-    pub host: String,
-    #[serde(default)]
     pub mode: String,
     #[serde(default)]
     pub learning: bool,
@@ -160,6 +158,16 @@ pub fn toast_xml(title: &str, body: &str) -> String {
     )
 }
 
+/// 見出しの前置き「kanmon WARN 60点: 」を外す（メニューでは先頭の【警告】等と重なるため）
+pub fn strip_title_prefix(t: &str) -> &str {
+    let Some(rest) = t.strip_prefix("kanmon ") else { return t };
+    match rest.find("点: ") {
+        // 前置きは「レベル 点数点: 」だけ（30 バイト以内）。それより後ろの「点: 」は本文なので外さない
+        Some(i) if i < 30 => &rest[i + "点: ".len()..],
+        _ => t,
+    }
+}
+
 /// メニューの 1 行（直近の警告）
 pub fn menu_label(a: &Alert) -> String {
     let lv = match a.level.as_str() {
@@ -171,7 +179,7 @@ pub fn menu_label(a: &Alert) -> String {
     // ts は "2026-11-19T03:14:00+09:00" → "11-19 03:14"
     let t = a.ts.get(5..16).map(|x| x.replace('T', " ")).unwrap_or_default();
     // & はメニューのアクセラレータになるので && にする
-    clean(&format!("{t} {lv}{}", a.title), 70).replace('&', "&&")
+    clean(&format!("{t} {lv}{}", strip_title_prefix(&a.title)), 70).replace('&', "&&")
 }
 
 #[cfg(test)]
@@ -228,7 +236,7 @@ mod tests {
             "alerts":[{"id":"e1","ts":"2026-11-19T03:14:00+09:00","level":"warn","score":60,"kind":"connect","title":"x","body":"y"}],
             "counts_24h":{"warn":1}}"#;
         let s = Status::parse(j).unwrap();
-        assert_eq!((s.host.as_str(), s.alerts.len()), ("h", 1));
+        assert_eq!((s.version.as_str(), s.alerts.len()), ("0.4.0", 1));
         assert!(Status::parse(r#"{"error":"forbidden"}"#).is_none());
         assert!(Status::parse("garbage").is_none());
     }
@@ -252,5 +260,9 @@ mod tests {
             body: String::new(),
         };
         assert_eq!(menu_label(&a), "11-19 03:14 【重大】R&&D");
+        let b = Alert { title: "kanmon NOTICE 30点: 自動起動の追加 kanmon-test".into(), ..a.clone() };
+        assert_eq!(menu_label(&b), "11-19 03:14 【重大】自動起動の追加 kanmon-test");
+        assert_eq!(strip_title_prefix("kanmon WARN 60点: a → b"), "a → b");
+        assert_eq!(strip_title_prefix("other"), "other");
     }
 }

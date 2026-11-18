@@ -77,7 +77,7 @@ detections:
   - id: P6
     name: autostart_added
     points: 30
-    description: 自動起動（LaunchAgents・LaunchDaemons・systemd 等）が追加・変更された
+    description: 自動起動（LaunchAgents・systemd・Windows の Run キー・スタートアップ・タスク・サービス 等）が追加・変更された
     kinds: [persistence]
     when:
       all:
