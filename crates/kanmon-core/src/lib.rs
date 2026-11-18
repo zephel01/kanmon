@@ -15,6 +15,7 @@ pub mod intel;
 pub mod jsonl;
 pub mod names;
 pub mod netclass;
+pub mod persist;
 pub mod rotate;
 pub mod rules;
 pub mod scoring;

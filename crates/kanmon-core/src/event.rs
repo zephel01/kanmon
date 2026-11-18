@@ -276,6 +276,22 @@ pub struct KanmonInfo {
     pub dns: Option<DnsFacts>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes: Option<BytesFacts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub persist: Option<PersistFacts>,
+}
+
+/// 居座りの検知（`network.kind = persistence`）の事実（`kanmon.persist.*`）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PersistFacts {
+    /// claude_hook / vscode_folderopen / pth_exec / workflow / git_hook / autostart / rc_pipe
+    pub kind: String,
+    /// added / changed / removed
+    pub change: String,
+    /// 中身の要約（フックのコマンド等）
+    pub detail: String,
+    /// network / pipe_shell / inline_code / base64 / tmp_path
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub risky: Vec<String>,
 }
 
 /// 送信量の報告（`network.kind = bytes_report`）の事実（`kanmon.bytes.*`）

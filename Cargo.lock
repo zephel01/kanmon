@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "kanmon-core"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -578,11 +578,12 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
 ]
 
 [[package]]
 name = "kanmonctl"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -593,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "kanmond"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "chrono",

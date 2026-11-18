@@ -88,6 +88,23 @@ enum Cmd {
         #[arg(long, default_value_t = 0.5)]
         min: f64,
     },
+    /// 居座り（開発ツールの設定・自動起動への仕込み）を走査して一覧表示する。読むだけで、実行も変更もしない
+    Scan {
+        /// 走査するプロジェクトのディレクトリ（複数可）。省略時は ~/kanmon-work
+        #[arg(long)]
+        root: Vec<PathBuf>,
+        /// /Library/LaunchDaemons・/etc/systemd/system 等、システム全体の自動起動も見る
+        #[arg(long)]
+        system: bool,
+        /// 怪しい特徴（network・pipe_shell 等）のあるものだけ表示
+        #[arg(long)]
+        risky: bool,
+        /// JSON で出力
+        #[arg(long)]
+        json: bool,
+        #[arg(long, default_value_t = 6)]
+        max_depth: usize,
+    },
     /// 直近のレベル別件数とスコア上位
     Status {
         #[arg(long, default_value = default_db())]
@@ -334,6 +351,46 @@ fn main() -> Result<()> {
             for (b, exe, dk) in rows {
                 println!("{:>6.3} {:>5} {:>8.1} {:>7.1}  {exe} → {dk}", b.score, b.n, b.median_interval_s, b.mad_s);
             }
+        }
+        Cmd::Scan { root, system, risky, json, max_depth } => {
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let roots: Vec<PathBuf> = if root.is_empty() {
+                home.iter().map(|h| h.join("kanmon-work")).filter(|p| p.is_dir()).collect()
+            } else {
+                root
+            };
+            let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
+            let homes: Vec<PathBuf> = home.into_iter().collect();
+            let mut items = kanmon_core::persist::scan(&roots, &homes, os, system, max_depth);
+            if risky {
+                items.retain(|i| !i.risky.is_empty());
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&items)?);
+                return Ok(());
+            }
+            println!(
+                "走査: {}{}",
+                roots.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "),
+                if system { "、システムの自動起動" } else { "" }
+            );
+            if items.is_empty() {
+                println!("見つかったものはありません");
+            }
+            let mut last_kind = String::new();
+            for i in &items {
+                if i.kind != last_kind {
+                    println!("\n[{}]", i.kind);
+                    last_kind = i.kind.clone();
+                }
+                let mark = if i.risky.is_empty() { "  ".to_string() } else { format!("⚠ {} ", i.risky.join(",")) };
+                println!("  {mark}{}\n      {}", i.detail, i.path);
+            }
+            let n = items.iter().filter(|i| !i.risky.is_empty()).count();
+            println!(
+                "\n合計 {} 件（怪しい特徴あり {n} 件）。kanmon は読むだけで、実行・変更はしていません",
+                items.len()
+            );
         }
         Cmd::Status { db, hours } => {
             let st = Store::open_readonly(&db)?;
