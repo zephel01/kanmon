@@ -23,9 +23,10 @@ kanmon は端末から出入りする通信を 1 本ずつ調べて、次の 2 �
 
 そのうえで、怪しい通信は**理由付きで**知らせます。判定ルールは YAML で書けるので、新しい手口が出てきても**再ビルドせずに**自分で対応できます。
 
-<!-- スクリーンショット：docs/images/alert-dialog.png を追加したらコメントを外す
-<p align="center"><img src="docs/images/alert-dialog.png" width="480" alt="警告ダイアログ"></p>
--->
+<p align="center">
+  <img src="docs/images/menubar.png" width="400" alt="Kanmon.app のメニュー：状態、学習期間、24 時間のレベル別件数、直近の警告">
+  <br><sub>macOS のメニューバーアプリ（Kanmon.app）。行をクリックすると、理由付きの詳細を表示します</sub>
+</p>
 
 > [!NOTE]
 > v0.1 は**監視と通知だけ**で、通信の遮断はまだしません。遮断はロードマップの次の段階です。
