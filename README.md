@@ -87,21 +87,40 @@ sudo kanmonctl alerts                                            # Linux
 ## 仕組み
 ```mermaid
 flowchart LR
-  subgraph collect["収集（kanmond）"]
-    S["ソケット一覧<br/>Linux: /proc/net<br/>macOS: lsof + libproc"]
+  subgraph ext["外のデータ（https のみ）"]
+    TI["脅威インテル<br/>Feodo・Spamhaus DROP<br/>1 日ごと"]
+    AS["AS のデータ<br/>kanmon-data の Release<br/>週 1 回・SHA-256 照合"]
+  end
+  subgraph collect["収集（kanmond、読むだけ）"]
+    S["ソケット一覧<br/>Linux: /proc/net<br/>macOS: lsof"]
     P["プロセス識別<br/>署名・パッケージ<br/>SHA-256・親プロセス"]
+    C["宛先の名前<br/>DNS 応答・TLS の SNI<br/>（libpcap）"]
+    V["送信量と開いているファイル<br/>Linux: sock_diag<br/>macOS: nettop"]
+    W["居座りの走査<br/>フック・folderOpen・.pth<br/>Git フック・自動起動"]
+    G["DNS の改ざん<br/>hosts・DNS サーバー<br/>DoH＋証明書で照合"]
   end
   subgraph judge["判定（kanmon-core）"]
-    F["事実の付与<br/>脅威インテル・ベースライン差分<br/>DGA・ビーコン"]
+    F["事実の付与<br/>脅威インテル・AS と回線の種類<br/>DGA・ビーコン・初めての宛先"]
+    B[("SQLite<br/>ベースライン<br/>いつもの形")]
     D["検知ルール<br/>detections/*.yaml"]
     R["許可/拒否ルール<br/>rules.json"]
   end
-  S --> P --> F --> D --> O["点数 → レベル"]
+  S --> P --> F
+  C --> F
+  V --> F
+  W --> F
+  G --> F
+  TI --> F
+  AS --> F
+  F <--> B
+  F --> D --> O["点数 → レベル"]
   R --> O
-  O --> N["通知<br/>ダイアログ / D-Bus / ntfy / Webhook"]
+  O --> N["通知<br/>ダイアログ / D-Bus / ntfy<br/>Webhook（JSON・Slack・Discord）"]
   O --> L["保存<br/>JSONL（ECS 互換）/ SQLite"]
+  O --> M["状態ソケット<br/>メニューバー / kanmonctl status"]
   L -. "kanmonctl replay" .-> D
 ```
+`kanmonctl inspect`（パッケージの更新の検査）は kanmond とは別に動き、PyPI・npm から取った差分を同じ検知ルールの書き方（`70-inspect.yaml`）で調べます。
 
 ## 検知ルールの例
 ```yaml

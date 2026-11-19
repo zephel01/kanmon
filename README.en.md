@@ -81,15 +81,40 @@ For the first 7 days kanmon runs in **learning mode**: it builds a baseline of n
 ## How it works
 ```mermaid
 flowchart LR
-  S["Socket snapshot<br/>Linux: /proc/net<br/>macOS: lsof + libproc"] --> P["Process identity<br/>signature, package<br/>SHA-256, parents"]
-  P --> F["Facts<br/>threat intel, baseline diff<br/>DGA, beacon"]
-  F --> D["Detections<br/>detections/*.yaml"]
-  D --> O["Score → level"]
-  R["Allow / deny rules<br/>rules.json"] --> O
-  O --> N["Alerts<br/>dialog / D-Bus / ntfy / webhook"]
+  subgraph ext["External data (https only)"]
+    TI["Threat intel<br/>Feodo, Spamhaus DROP<br/>daily"]
+    AS["AS data<br/>kanmon-data release<br/>weekly, SHA-256 checked"]
+  end
+  subgraph collect["Collection (kanmond, read-only)"]
+    S["Socket snapshot<br/>Linux: /proc/net<br/>macOS: lsof"]
+    P["Process identity<br/>signature, package<br/>SHA-256, parents"]
+    C["Destination names<br/>DNS answers, TLS SNI<br/>(libpcap)"]
+    V["Upload volume and open files<br/>Linux: sock_diag<br/>macOS: nettop"]
+    W["Persistence scan<br/>hooks, folderOpen, .pth<br/>Git hooks, autostart"]
+    G["DNS tampering<br/>hosts, resolvers<br/>DoH + certificate check"]
+  end
+  subgraph judge["Judgement (kanmon-core)"]
+    F["Facts<br/>threat intel, AS and network type<br/>DGA, beacon, first-seen"]
+    B[("SQLite<br/>baselines<br/>usual pattern")]
+    D["Detections<br/>detections/*.yaml"]
+    R["Allow / deny rules<br/>rules.json"]
+  end
+  S --> P --> F
+  C --> F
+  V --> F
+  W --> F
+  G --> F
+  TI --> F
+  AS --> F
+  F <--> B
+  F --> D --> O["Score → level"]
+  R --> O
+  O --> N["Alerts<br/>dialog / D-Bus / ntfy<br/>webhook (JSON, Slack, Discord)"]
   O --> L["Storage<br/>JSONL (ECS) / SQLite"]
+  O --> M["Status socket<br/>menu bar / kanmonctl status"]
   L -. "kanmonctl replay" .-> D
 ```
+`kanmonctl inspect` (package update inspection) runs separately from kanmond and checks the diff it downloads from PyPI or npm with the same rule format (`70-inspect.yaml`).
 
 ## Example rule
 ```yaml
