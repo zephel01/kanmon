@@ -1,0 +1,90 @@
+# 宛先の AS・回線の種類（v0.5.1、設計書 §9.1b、kanmon.net_type・destination.as.*）
+# 国は記録するだけで、点数には使わない（踏み台の PC を日本に置かれると、国の判定は当てにならない）。
+# 見るのは「どんな回線か」と「名前を引かずに IP へ直結したか」。
+# AS 番号は iptoasn.com のデータの名前で確認した（2026-11-19）。一覧は網羅していない。
+# 一覧に無い AS は "unknown" になり、点は付かない。足すときは番号を文字列で書く。
+lists:
+  # クラウド・ホスティング
+  cloud_asns:
+    ["16509", "14618", "8987", # Amazon
+     "396982", "15169", # Google
+     "8075", # Microsoft
+     "31898", # Oracle
+     "14061", # DigitalOcean
+     "24940", # Hetzner
+     "16276", # OVH
+     "63949", # Akamai Connected Cloud（Linode）
+     "20473", # Vultr
+     "45102", "37963", # Alibaba
+     "132203", # Tencent
+     "9370", "7684", # さくらインターネット
+     "51167", # Contabo
+     "12876"] # Scaleway
+  # CDN
+  cdn_asns:
+    ["13335", "209242", # Cloudflare
+     "20940", "16625", "21342", "32787", # Akamai
+     "54113"] # Fastly
+  # 住宅用・携帯の回線が主な AS（企業向け・データセンターも混ざる。目安）
+  residential_asns:
+    ["4713", # OCN
+     "2516", # KDDI
+     "17676", # ソフトバンク
+     "2527", # So-net
+     "2518", # BIGLOBE
+     "9605", # NTT ドコモ
+     "4685", # 朝日ネット
+     "17506", # ARTERIA（UCOM）
+     "17511", # OPTAGE
+     "9824", # J:COM
+     "7922", # Comcast
+     "20115", # Charter
+     "3320", # Deutsche Telekom
+     "2856", # BT
+     "3215", # Orange
+     "4766", # Korea Telecom
+     "3462", # HiNet
+     "5089", # Virgin Media
+     "1221"] # Telstra
+  # 相手の PC と直接つなぐのが普通なもの（ビデオ会議・VPN・P2P・画面共有）。R1・R2 の除外
+  p2p_apps:
+    [tailscaled, tailscale, Tailscale, "IPNExtension", warp-svc, "Cloudflare WARP", "zoom.us", zoom, ZoomWebviewHost,
+     FaceTime, avconferenced, rapportd, identityservicesd, "Microsoft Teams", "MSTeams", "Microsoft Teams WebView",
+     "Slack Helper", Discord, "Discord Helper", steam, steamwebhelper, transmission-daemon, transmission-gtk,
+     qbittorrent, syncthing, AnyDesk, TeamViewer, parsecd, WebexHelper, "Webex", "Google Meet"]
+
+detections:
+  - id: R1
+    name: residential_direct
+    points: 25
+    # 例：署名の無い常駐が、住宅用回線の IP（踏み台の PC）へ直接つなぐ。クラウドや CDN の宛先より珍しい
+    description: ブラウザ・P2P 以外が、住宅用回線の IP へ直接つないだ
+    kinds: [connect]
+    when:
+      all:
+        - { field: kanmon.net_type, op: eq, value: residential }
+        - not:
+            any:
+              - { field: process.name, op: in, value: "@browsers", ci: true }
+              - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
+              - { field: process.name, op: in, value: "@p2p_apps", ci: true }
+
+  - id: R2
+    name: ip_without_name
+    points: 10
+    # 名前の観測が動いているのに、DNS も SNI も無いままインターネットの IP へつないだ。
+    # 起動時の既存の接続・DNS・NTP は除く。単独では記録だけ（DoH を使うアプリもあるため）
+    description: ブラウザ・P2P 以外が、名前を引かずにインターネットの IP へ直結
+    kinds: [connect]
+    when:
+      all:
+        - { field: kanmon.names_active, op: eq, value: true }
+        - { field: event.action, op: eq, value: connect_observed }
+        - { field: network.scope, op: eq, value: internet }
+        - { field: destination.domain, op: missing }
+        - not:
+            any:
+              - { field: destination.port, op: in, value: [53, 123, 853] }
+              - { field: process.name, op: in, value: "@browsers", ci: true }
+              - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
+              - { field: process.name, op: in, value: "@p2p_apps", ci: true }

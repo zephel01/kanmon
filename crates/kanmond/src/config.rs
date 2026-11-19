@@ -49,6 +49,33 @@ pub struct Config {
     pub persistence: PersistCfg,
     /// プロセスごとの「いつもの形」との違い
     pub profile: ProfileCfg,
+    /// 宛先の AS（回線の種類・国）。データは kanmon-data の Release から取る
+    pub asn: AsnCfg,
+}
+
+/// 宛先の AS の照合。iptoasn.com のデータを kanmon-data の CI が週 1 回取って縮めたもの（KASN1）を使う。
+/// 利用者が iptoasn.com から直接取ると運営者の負荷になるので、既定の取得元は kanmon-data にしている
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AsnCfg {
+    pub enabled: bool,
+    /// KASN1（gzip）の URL。https のみ。同じ場所に `<url>.sha256` を置く
+    pub url: String,
+    /// 取り直す間隔（日）。端末ごとに最大 1 日ずらす
+    pub refresh_days: u32,
+    /// 手元のファイル（KASN1、gzip 可）。指定すると取得しない（社内ミラー・テスト用）
+    pub file: Option<PathBuf>,
+}
+
+impl Default for AsnCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            url: "https://github.com/zephel01/kanmon-data/releases/download/asn-data/asn.kasn.gz".into(),
+            refresh_days: 7,
+            file: None,
+        }
+    }
 }
 
 /// プロセスごとの「いつもの形」（宛先・時間帯・親子・送信量）。形が安定しているプロセスで違いが出たときだけ点数を付ける
@@ -399,6 +426,7 @@ impl Default for Config {
             log: LogCfg::default(),
             persistence: PersistCfg::default(),
             profile: ProfileCfg::default(),
+            asn: AsnCfg::default(),
         }
     }
 }
@@ -411,6 +439,9 @@ impl Config {
                 let c: Config = toml::from_str(&t).with_context(|| format!("parse {}", p.display()))?;
                 if c.dns.crosscheck && !c.dns.doh_url.starts_with("https://") {
                     anyhow::bail!("dns.doh_url は https:// で始めてください");
+                }
+                if c.asn.enabled && c.asn.file.is_none() && !c.asn.url.starts_with("https://") {
+                    anyhow::bail!("asn.url は https:// で始めてください");
                 }
                 Ok(c)
             }

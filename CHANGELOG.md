@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-19
+### 追加
+- **宛先の AS と回線の種類**（設計書 §9.1b、`detections/22-asn.yaml`）
+  - 宛先に `destination.as.number`・`destination.as.organization.name`・`destination.geo.country_iso_code`・`kanmon.net_type`（cloud / cdn / residential / unknown）を付ける。国は記録だけで、点数には使わない
+  - R1：ブラウザ・P2P 以外が住宅用回線の IP へ直接（+25）。R2：名前の観測が動いているのに、名前を引かずにインターネットの IP へ直結（+10）
+  - A5：いつも同じ AS にしかつながないプロセスが、初めての AS へ（+10、`kanmon.profile.new_asn`）
+  - 一覧：`cloud_asns`・`cdn_asns`・`residential_asns`・`p2p_apps`（網羅はしていない。一覧に無い AS は unknown で点は付かない）
+  - `kanmon.names_active`：DNS・SNI の観測が動いていて起動から 5 分たっているか
+- **AS のデータの配布**：iptoasn.com（PDDL）のデータを kanmon-data リポジトリの CI が週 1 回だけ取り、縮めた形式（KASN1、約 3MB）で Release に置く。kanmond は 7 日ごと（端末ごとにずらす）に `.sha256` を見て、変わっていれば取る。SHA-256・形式・件数を確かめ、合わなければ前回分を使う。`[asn]`（`enabled`・`url`・`refresh_days`・`file`）
+- `tools/asn-data/`：変換スクリプト（`build_asn.py`）と kanmon-data 用のワークフローの控え
+
 ## [0.5.0] - 2026-11-19
 ### 追加
 - **プロセスごとの「いつもの形」との違い**（設計書 §9.5b、`detections/45-profile.yaml`、`kanmon.profile.*`）

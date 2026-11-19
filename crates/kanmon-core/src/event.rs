@@ -234,6 +234,29 @@ pub struct Destination {
     pub registered_domain: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub domain_source: Option<String>,
+    /// 宛先の AS（ECS の destination.as）。AS のデータがあるときだけ
+    #[serde(rename = "as", default, skip_serializing_if = "Option::is_none")]
+    pub as_: Option<AsField>,
+    /// 宛先の AS の登録国（ECS の destination.geo）。記録だけで、点数には使わない
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geo: Option<GeoField>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AsField {
+    pub number: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<AsOrg>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AsOrg {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeoField {
+    pub country_iso_code: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -260,6 +283,12 @@ pub struct KanmonInfo {
     pub beacon: Option<crate::beacon::BeaconScore>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dest_key: Option<String>,
+    /// DNS・SNI の観測が動いていて、名前の記憶がたまっている（起動から 5 分）。偽なら「名前が無い」は判断に使わない
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub names_active: bool,
+    /// 宛先の回線の種類：cloud / cdn / residential / unknown（AS のデータがあるときだけ）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_type: Option<String>,
     /// このプロセスが初めて行く宛先（ベースライン差分）
     #[serde(default)]
     pub dest_first_for_process: bool,
@@ -312,6 +341,11 @@ pub struct ProfileFacts {
     pub new_child: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// 宛先の AS の形が安定しているのに、初めての AS
+    #[serde(default)]
+    pub new_asn: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asn: Option<u32>,
     /// 送信量：今回 ÷ これまでの最大（bytes_report）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume_ratio: Option<f64>,

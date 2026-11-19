@@ -65,6 +65,9 @@ interval_s = 1
 window_s = 60
 min_report_kb = 512
 report_every_min = 1
+[asn]
+# 文書用の AS データ（203.0.113.200〜209 を住宅用の AS として載せたテスト用。取得はしない）
+file = "$ROOT/tests/fixtures/asn-doc.kasn.gz"
 EOF
 
 # ---- 偽 ntfy（受け取った JSON を保存するだけ）
@@ -233,6 +236,10 @@ echo "[E] 疑似ビーコン：1 秒周期 × 10 回（S7）"
 sleep 12  # ビーコン集計を待つ
 
 echo "[F] 状態ソケット（メニューバーアプリ用）"
+echo "[R] 住宅用回線の IP へ直接（R1、destination.as・geo・net_type）"
+cp "$W/netclient" "$W/asn-probe"
+"$W/asn-probe" 203.0.113.205 443 1 0 1500
+
 echo "[Q] 安定した親が初めての子（curl）を起動して通信（A2 A2b）"
 cp /bin/bash "$W/kanmon-parent"
 cp "$W/netclient" "$W/curl"
@@ -309,6 +316,12 @@ check("H: npm 配下の python に D4", hh and "D4" in sig(hh[0]))
 l = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "203.0.113.79")
 check("Q: 安定した親の初めての子に A2 A2b", l and {"A2", "A2b"} <= set(sig(l[0]))
       and l[0]["kanmon"].get("profile", {}).get("new_child") is True and l[0]["kanmon"]["profile"].get("parent") == "kanmon-parent")
+r = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "203.0.113.205")
+check("R: 住宅用回線の宛先に R1、AS 4713・JP・residential", r and "R1" in sig(r[0])
+      and r[0]["destination"].get("as", {}).get("number") == 4713 and r[0]["destination"].get("geo", {}).get("country_iso_code") == "JP"
+      and r[0]["kanmon"].get("net_type") == "residential")
+ru = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "198.51.100.7")
+check("R: 一覧に無い AS は unknown で R1 なし", ru and ru[0]["kanmon"].get("net_type") == "unknown" and "R1" not in sig(ru[0]))
 st2 = json.load(open(sys.argv[1].replace("events.jsonl", "status-restart.json")))
 check("I: 再起動後も直近の警告が残る", any(a["level"] == "critical" for a in st2.get("alerts", [])))
 j = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "203.0.113.60")

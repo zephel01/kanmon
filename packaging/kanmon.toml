@@ -127,3 +127,12 @@ max_children = 10
 hour_min_age_days = 7
 # 送信量は、この MB 以上のときだけ見る
 volume_min_mb = 10
+
+# 宛先の AS（回線の種類・国）。データは kanmon-data の Release から週 1 回取る（iptoasn.com には直接行かない）
+[asn]
+enabled = true
+url = "https://github.com/zephel01/kanmon-data/releases/download/asn-data/asn.kasn.gz"
+# 取り直す間隔（日）。端末ごとに最大 1 日ずらす
+refresh_days = 7
+# 手元のファイル（KASN1、gzip 可）を使うときだけ書く。書くと取得しない
+# file = "/etc/kanmon/asn.kasn.gz"

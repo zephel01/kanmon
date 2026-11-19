@@ -5,6 +5,7 @@
 //! これにより、ライブ監視・過去ログの再生（replay）・手書きフィクスチャを
 //! 同じエンジンで評価できる。
 
+pub mod asn;
 pub mod beacon;
 pub mod detect;
 pub mod dga;
