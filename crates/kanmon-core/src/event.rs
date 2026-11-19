@@ -282,6 +282,41 @@ pub struct KanmonInfo {
     /// 通信のイベントに付け、「仕込み → 外へ送る」の 2 段階を結び付けて評価する
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub persist_recent: Vec<String>,
+    /// プロセスごとの「いつもの形」との違い（`kanmon.profile.*`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<ProfileFacts>,
+}
+
+/// プロセスごとの「いつもの形」との違い（`kanmon.profile.*`）。学習期間中は記録するだけで、違いは立てない
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ProfileFacts {
+    /// 宛先の形が安定しているプロセスか
+    #[serde(default)]
+    pub stable: bool,
+    /// 安定しているのに、初めての宛先（登録ドメイン）
+    #[serde(default)]
+    pub new_dest: bool,
+    /// 知っている宛先（登録ドメイン）の数
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_dests: Option<i64>,
+    /// 最後に新しい宛先が増えてからの日数
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quiet_days: Option<f64>,
+    /// 初めての時間帯（0〜23 時）に通信した（観測が長いプロセスだけ）
+    #[serde(default)]
+    pub new_hour: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hour: Option<u32>,
+    /// 子の形が安定している親が、初めての子を起動し、その子が通信した
+    #[serde(default)]
+    pub new_child: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// 送信量：今回 ÷ これまでの最大（bytes_report）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_ratio: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_max: Option<u64>,
 }
 
 /// 居座りの検知（`network.kind = persistence`）の事実（`kanmon.persist.*`）

@@ -71,6 +71,10 @@ detections:
 | `kanmon.dns.added` / `removed` / `added_scope` / `server` / `other` / `tls` | 追加・削除された行や DNS サーバー、追加先の範囲、応答した DNS サーバー、比較相手の答え、答えの IP ごとの証明書の確認結果（N3） |
 | `kanmon.ti_match` / `ti_source` | 脅威インテルに一致したか、どのリストか |
 | `kanmon.dest_first_for_process` / `port_first_for_process` / `listen_new` | ベースラインとの差分（学習期間中は常に false） |
+| `kanmon.profile.stable` / `new_dest` / `known_dests` / `quiet_days` | いつもの形（宛先）：形が安定しているか、安定しているのに初めての登録ドメインか、知っている宛先の数、最後に新しい宛先が増えてからの日数 |
+| `kanmon.profile.new_hour` / `hour` | いつもの形（時間帯）：観測 7 日以上のプロセスが、初めての時間帯（0〜23）に通信した |
+| `kanmon.profile.new_child` / `parent` | いつもの形（親子）：子の種類が安定している親が、初めての子を起動し、その子が通信した |
+| `kanmon.profile.volume_ratio` / `volume_max` | いつもの形（送信量、`bytes_report`）：今回 ÷ これまでの最大、これまでの最大（バイト） |
 | `kanmon.dga_score` | 自動生成ドメインらしさ（0〜1、ドメインがあるときだけ） |
 | `kanmon.beacon.score` / `n` / `median_interval_s` / `mad_s` | ビーコン（`beacon_report` のみ） |
 | `kanmon.bytes.out` / `window_s` | 1 つの宛先へ窓（既定 10 分）の間に送ったバイト数（`bytes_report` のみ） |
@@ -97,6 +101,11 @@ detections:
 | S15 / S16 / S17 | 新しい待受を外部に公開 / インターネットから着信 / raw ソケット | +25 / +30 / +20 |
 | S18 | トンネル・動的 DNS 系ドメイン | +10 |
 | T-trusted | Apple 署名・公式パッケージ（curl・bash・ssh 等は除く） | −15 |
+| A1 | いつもの形：いつも同じ宛先しか使わないプロセスが、初めての宛先へ（ブラウザは除く） | +20 |
+| A2 | いつもの形：いつもと違う子（シェル・ダウンロード用のコマンド）が起動されて通信 | +25 |
+| A2b | いつもの形：いつもと違う子が起動されて通信 | +10 |
+| A3 | いつもの形：いつもの送信量の 10 倍以上（10MB 以上のとき。ブラウザは除く） | +25 |
+| A4 | いつもの形：観測 7 日以上のプロセスが、使ったことのない時間帯に通信 | +10 |
 
 ### 開発者を狙う手口（`40-developer.yaml`）
 | ID | 内容 | 点 |

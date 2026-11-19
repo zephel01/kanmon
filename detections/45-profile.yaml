@@ -1,0 +1,60 @@
+# プロセスごとの「いつもの形」との違い（設計書 §9.6、kanmon.profile.*）
+# 形が安定しているプロセス（何日も同じ宛先・同じ子しか使わない）で違いが出たときだけ点数を付ける。
+# 違いだけでは通知に届かない点数（10〜25）にし、他の怪しい特徴と重なったときに届くようにする。
+# 学習期間中は記録するだけで、違いは立たない。
+detections:
+  - id: A1
+    name: profile_new_destination
+    points: 20
+    # 例：毎日同じ 3 つの宛先しか使わない CLI・常駐が、見たことのない登録ドメインへ
+    description: いつも同じ宛先しか使わないプロセスが、初めての宛先へ
+    kinds: [connect]
+    when:
+      all:
+        - { field: kanmon.profile.new_dest, op: eq, value: true }
+        - not:
+            any:
+              - { field: process.name, op: in, value: "@browsers", ci: true }
+              - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
+
+  - id: A2
+    name: profile_new_child_shell
+    points: 25
+    # 例：いつも子を作らない（決まった子しか作らない）アプリが、シェル・curl 等を起動して通信
+    description: いつもと違う子プロセス（シェル・ダウンロード用のコマンド）が起動されて通信
+    kinds: [connect, listen]
+    when:
+      all:
+        - { field: kanmon.profile.new_child, op: eq, value: true }
+        - any:
+            - { field: process.name, op: in, value: "@shells_interp", ci: true }
+            - { field: process.name, op: in, value: "@downloaders", ci: true }
+
+  - id: A2b
+    name: profile_new_child
+    points: 10
+    description: いつもと違う子プロセスが起動されて通信
+    kinds: [connect, listen]
+    when: { field: kanmon.profile.new_child, op: eq, value: true }
+
+  - id: A3
+    name: profile_volume_spike
+    points: 25
+    # これまでの最大（無ければ報告の下限 1MB）の 10 倍以上を 10 分で送った（10MB 以上のときだけ見る）
+    description: いつもの送信量の 10 倍以上を送った
+    kinds: [bytes_report]
+    when:
+      all:
+        - { field: kanmon.profile.volume_ratio, op: gte, value: 10 }
+        - not:
+            any:
+              - { field: process.name, op: in, value: "@browsers", ci: true }
+              - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
+
+  - id: A4
+    name: profile_new_hour
+    points: 10
+    # 観測が 7 日以上のプロセスが、使ったことのない時間帯に通信（夜中に動き出した等）
+    description: いつも使わない時間帯に通信
+    kinds: [connect]
+    when: { field: kanmon.profile.new_hour, op: eq, value: true }
