@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# macOS へ導入（sudo）。cargo build --release 済みの前提。
+# macOS へ導入（sudo）。cargo build --release 済みの前提（版が違えば止める）。
 # 旧名 netmon が入っている場合は、設定・拒否リスト・DB（学習期間とベースライン）を引き継ぎ、
 # 旧デーモンを止めて旧バイナリと plist を外す。旧データと旧ログは消さずに残す。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ "$(id -u)" = 0 ] || { echo "sudo で実行してください"; exit 1; }
+# shellcheck source=packaging/build-check.sh
+. packaging/build-check.sh
+check_build_version . || exit 1
 # P はテスト用の接頭辞（通常は空）。例：KANMON_PREFIX=/tmp/macroot で疑似環境に入れる
 P="${KANMON_PREFIX:-}"
 # shellcheck source=packaging/launchd-lib.sh

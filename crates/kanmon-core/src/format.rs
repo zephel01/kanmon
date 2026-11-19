@@ -185,6 +185,24 @@ fn persist_text(v: &Value, level: &str, score: i64) -> (String, String) {
 }
 
 /// (タイトル, 本文) を返す。タイトルは 1 行、本文は複数行。
+/// 宛先の AS の 1 行（v0.5.2）。例：`  宛先の回線: AS4713 OCN（住宅用回線・JP）`。AS が無ければ None
+fn as_line(v: &Value) -> Option<String> {
+    let n = get_path(v, "destination.as.number")?.as_u64()?;
+    let name = s(v, "destination.as.organization.name").filter(|x| !x.is_empty());
+    let kind = match s(v, "kanmon.net_type") {
+        Some("cloud") => "クラウド",
+        Some("cdn") => "CDN",
+        Some("residential") => "住宅用回線",
+        _ => "種類は不明",
+    };
+    let mut paren = vec![kind.to_string()];
+    if let Some(cc) = s(v, "destination.geo.country_iso_code") {
+        paren.push(cc.to_string());
+    }
+    let name = name.map(|x| format!(" {x}")).unwrap_or_default();
+    Some(format!("  宛先の回線: AS{n}{name}（{}）", paren.join("・")))
+}
+
 pub fn alert_text(v: &Value) -> (String, String) {
     if s(v, "network.kind") == Some("persistence") {
         let level = s(v, "kanmon.level").unwrap_or("info");
@@ -257,6 +275,9 @@ pub fn alert_text(v: &Value) -> (String, String) {
     if let Some(sc) = s(v, "network.scope") {
         lines.push(format!("  範囲: {sc}  / {}", s(v, "network.transport").unwrap_or("")));
     }
+    if let Some(l) = as_line(v) {
+        lines.push(l);
+    }
     lines.push(format!("【プロセス】{exe}"));
     let pid = get_path(v, "process.pid").map(|x| x.to_string());
     let user = s(v, "process.user");
@@ -298,6 +319,25 @@ pub fn alert_text(v: &Value) -> (String, String) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn as_line_in_body() {
+        let v = json!({"network": {"kind": "connect", "scope": "internet"},
+            "process": {"executable": "/x/helper"},
+            "destination": {"ip": "203.0.113.5", "port": 443,
+                "as": {"number": 4713, "organization": {"name": "OCN - NTT DOCOMO BUSINESS,Inc."}},
+                "geo": {"country_iso_code": "JP"}},
+            "kanmon": {"level": "notice", "score": 45, "net_type": "residential", "signals": []}});
+        let (_, body) = alert_text(&v);
+        assert!(body.contains("宛先の回線: AS4713 OCN - NTT DOCOMO BUSINESS,Inc.（住宅用回線・JP）"), "{body}");
+        // 名前が無い AS は番号だけ。種類が無ければ「種類は不明」
+        let v = json!({"network": {"kind": "connect"}, "destination": {"ip": "198.51.100.1", "port": 443,
+            "as": {"number": 64496}}, "kanmon": {"level": "info", "score": 0}});
+        assert!(alert_text(&v).1.contains("宛先の回線: AS64496（種類は不明）"));
+        // AS が無ければ行を出さない
+        let v = json!({"network": {"kind": "connect"}, "destination": {"ip": "198.51.100.1"}, "kanmon": {}});
+        assert!(!alert_text(&v).1.contains("宛先の回線"));
+    }
 
     #[test]
     fn readable_text() {

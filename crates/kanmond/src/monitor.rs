@@ -170,6 +170,16 @@ impl Monitor {
                 detections: dets.detections.len(),
                 intel: intel.len(),
                 events_path: cfg.jsonl.path.display().to_string(),
+                // 起動直後から件数と学習期間を出す。最初の走査（macOS ではプロセスの署名の確認で
+                // 数十秒かかることがある）が終わるまで、メニューに 0 件と出ないように
+                counts_24h: store
+                    .level_counts(Utc::now().timestamp() - 86_400)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect(),
+                learning: cfg.mode == "learning"
+                    && (cfg.learning_days == 0
+                        || Utc::now().timestamp() - installed_at < cfg.learning_days as i64 * 86_400),
                 ..Default::default()
             },
             Some(cfg.data_dir.join("kanmon.db")),
@@ -494,6 +504,17 @@ impl Monitor {
         }
     }
 
+    /// events.jsonl へ書く。`jsonl.min_level` より低いレベルは書かない（SQLite には別に入れている）
+    fn jsonl_write(&mut self, v: &serde_json::Value) -> Result<()> {
+        use kanmon_core::scoring::Level;
+        let min = Level::parse(&self.cfg.jsonl.min_level).unwrap_or(Level::Info);
+        let lv = v.pointer("/kanmon/level").and_then(|x| x.as_str()).and_then(Level::parse).unwrap_or(Level::Info);
+        if lv < min {
+            return Ok(());
+        }
+        self.jsonl.write(v)
+    }
+
     fn next_id(&mut self) -> String {
         self.counter = self.counter.wrapping_add(1);
         format!("e_{:x}{:04x}", Utc::now().timestamp_micros(), self.counter & 0xffff)
@@ -637,7 +658,7 @@ impl Monitor {
         let mut v = serde_json::to_value(&e)?;
         let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);
         self.store.insert_event(&v, now_s)?;
-        self.jsonl.write(&v)?;
+        self.jsonl_write(&v)?;
         if self.print {
             println!("{}", serde_json::to_string(&v)?);
         }
@@ -744,7 +765,7 @@ impl Monitor {
         let mut v = serde_json::to_value(&e)?;
         let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);
         self.store.insert_event(&v, now_s)?;
-        self.jsonl.write(&v)?;
+        self.jsonl_write(&v)?;
         if self.print {
             println!("{}", serde_json::to_string(&v)?);
         }
@@ -1304,7 +1325,7 @@ impl Monitor {
         let mut v = serde_json::to_value(&e)?;
         let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);
         self.store.insert_event(&v, now)?;
-        self.jsonl.write(&v)?;
+        self.jsonl_write(&v)?;
         if self.print {
             println!("{}", serde_json::to_string(&v)?);
         }
@@ -1363,7 +1384,7 @@ impl Monitor {
         e.kanmon.dns = Some(facts);
         let Ok(mut v) = serde_json::to_value(&e) else { return };
         let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);
-        if let Err(err) = self.store.insert_event(&v, now).and_then(|_| self.jsonl.write(&v)) {
+        if let Err(err) = self.store.insert_event(&v, now).and_then(|_| self.jsonl_write(&v)) {
             logln!("DNS 検知イベントの保存に失敗: {err:#}");
         }
         if self.print {
@@ -1426,7 +1447,7 @@ impl Monitor {
             let mut v = serde_json::to_value(&e)?;
             let out = scoring::apply(&mut v, &self.dets, &self.rules, &self.cfg.thresholds);
             self.store.insert_event(&v, now)?;
-            self.jsonl.write(&v)?;
+            self.jsonl_write(&v)?;
             if self.print {
                 println!("{}", serde_json::to_string(&v)?);
             }

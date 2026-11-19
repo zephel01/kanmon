@@ -56,6 +56,7 @@ cargo build --release
 sudo packaging/install-macos.sh     # macOS (launchd)
 sudo packaging/install-linux.sh     # Linux (systemd)
 ```
+To update, run `git pull`, `cargo build --release` and the install script again. The install script stops if the built binaries' version does not match the repository's, so a stale build is never installed.
 
 Linux packages (.deb / .rpm) from the [releases](https://github.com/zephel01/kanmon/releases). They do not start the service automatically; review the config first, then enable it:
 ```bash
