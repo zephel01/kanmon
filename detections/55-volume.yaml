@@ -6,7 +6,9 @@
 lists:
   # 開いていたら持ち出しを疑うファイル（パスの一部）
   sensitive_paths:
-    ["/.git/objects/", ".bundle", "/.env", ".env.local", "/.ssh/", "/.aws/", "/.config/gcloud/", "/.kube/",
+    # Git の bundle（〜.bundle）はここに入れない。macOS のプラグインのフォルダ（〜.bundle/）にも部分一致するため、
+    # V4 で「.bundle で終わる」を別に見る
+    ["/.git/objects/", "/.env", ".env.local", "/.ssh/", "/.aws/", "/.config/gcloud/", "/.kube/",
      "/.docker/config.json", "/.npmrc", "/.pypirc", "/.netrc", "/.gnupg/", "id_rsa", "id_ed25519",
      "/Library/Keychains/", "/Cookies", "/Login Data", "/.git-credentials"]
   # モデル・データの拡張子
@@ -48,8 +50,16 @@ detections:
     kinds: [bytes_report]
     when:
       all:
-        - { field: kanmon.bytes.open_paths, op: contains, value: "@sensitive_paths" }
+        - any:
+            - { field: kanmon.bytes.open_paths, op: contains, value: "@sensitive_paths" }
+            - { field: kanmon.bytes.open_paths, op: regex, value: '(?i)\.bundle$' }
         - { field: kanmon.bytes.out, op: gte, value: 1048576 }
+        # ブラウザが自分の Cookies を開いたまま送るのは普通（実機で Chrome が 1 日 20 件以上）。
+        # ブラウザ以外が Cookies を開いて送るのは情報窃取の形なので、引き続き当てる
+        - not:
+            any:
+              - { field: process.name, op: in, value: "@browsers", ci: true }
+              - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
 
   - id: V5
     name: upload_exceeds_open_files
