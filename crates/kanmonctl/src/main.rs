@@ -149,6 +149,34 @@ enum Cmd {
         #[arg(long, default_value_t = 24)]
         hours: i64,
     },
+    /// 共有用に書き出す（IP・ホスト名・ユーザー名・ホームのパス・引数等を伏せる）。既定は伏せたログ（JSONL）
+    Export {
+        #[arg(long, default_value = default_db())]
+        db: PathBuf,
+        /// DB ではなく JSONL から読む（`-` で標準入力）
+        #[arg(long)]
+        events: Option<PathBuf>,
+        #[arg(long, default_value_t = 24)]
+        hours: i64,
+        /// 含める最低のレベル（info/notice/warn/critical）
+        #[arg(long, default_value = "notice")]
+        min_level: String,
+        /// 集計の表（Markdown）だけを出す。IP・ドメイン・パスは出ない
+        #[arg(long)]
+        summary: bool,
+        /// ドメイン：keep（そのまま）/ registered（登録ドメインだけ残す）/ mask（全部伏せる）
+        #[arg(long, default_value = "registered")]
+        domains: String,
+        /// パスをファイル名だけにする
+        #[arg(long)]
+        paths_basename: bool,
+        /// 時刻を 1 時間単位に丸める
+        #[arg(long)]
+        round_time: bool,
+        /// 記号と元の値の対応表をこのファイルに保存する（自分で見返す用。共有しないこと）
+        #[arg(long)]
+        map: Option<PathBuf>,
+    },
 }
 
 const fn default_jsonl() -> &'static str {
@@ -473,6 +501,65 @@ fn main() -> Result<()> {
             if code != 0 {
                 std::process::exit(code);
             }
+        }
+        Cmd::Export { db, events, hours, min_level, summary, domains, paths_basename, round_time, map } => {
+            use kanmon_core::redact::{summarize, DomainMode, Options, Redactor};
+            let min = Level::parse(&min_level).context("min-level は info/notice/warn/critical")?;
+            let domains = DomainMode::parse(&domains).context("domains は keep/registered/mask")?;
+            let since = chrono::Utc::now().timestamp() - hours * 3600;
+            let mut evs: Vec<serde_json::Value> = match events {
+                Some(p) => {
+                    let text = if p.as_os_str() == "-" {
+                        let mut t = String::new();
+                        std::io::Read::read_to_string(&mut std::io::stdin(), &mut t)?;
+                        t
+                    } else {
+                        std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?
+                    };
+                    let since_dt = chrono::DateTime::from_timestamp(since, 0).unwrap_or_default();
+                    text.lines()
+                        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                        .filter(|v| {
+                            v["@timestamp"]
+                                .as_str()
+                                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                                .is_none_or(|t| t >= since_dt)
+                        })
+                        .filter(|v| {
+                            v.pointer("/kanmon/level")
+                                .and_then(|x| x.as_str())
+                                .and_then(Level::parse)
+                                .unwrap_or(Level::Info)
+                                >= min
+                        })
+                        .collect()
+                }
+                None => {
+                    let levels: Vec<&str> = ["info", "notice", "warn", "critical"]
+                        .into_iter()
+                        .filter(|l| Level::parse(l).is_some_and(|x| x >= min))
+                        .collect();
+                    let mut v = Store::open_readonly(&db)?.recent_events(since, &levels, 1_000_000)?;
+                    v.reverse();
+                    v
+                }
+            };
+            let mut r = Redactor::new(Options { domains, paths_basename, round_time });
+            evs = evs.iter().map(|e| r.event(e)).collect();
+            if summary {
+                print!("{}", summarize(&evs, hours, min.as_str()).markdown());
+            } else {
+                use std::io::Write;
+                let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+                for e in &evs {
+                    writeln!(out, "{e}")?;
+                }
+            }
+            if let Some(p) = map {
+                std::fs::write(&p, serde_json::to_string_pretty(&r.mapping())?)?;
+                eprintln!("対応表を {} に保存しました（共有しないでください）", p.display());
+            }
+            eprintln!("{} 件を書き出しました（伏せ済み）", evs.len());
         }
         Cmd::Status { db, hours } => {
             let st = Store::open_readonly(&db)?;

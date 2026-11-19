@@ -4,6 +4,9 @@
 //!   - `{"cmd":"status"}` → 状態スナップショット
 //!   - `{"cmd":"ping"}`   → `{"ok":true}`
 //!   - `{"cmd":"alerts","level":"notice","hours":24,"limit":500}` → 期間内の警告の一覧とルール別の件数
+//!   - `{"cmd":"export","hours":24,"min_level":"notice","format":"summary","domains":"registered",
+//!     "paths":"full","round_time":false}` → 共有用に伏せた集計（Markdown）とログ（v0.5.3）。
+//!     伏せるのは kanmond（root）の中で行い、ソケットの外へは伏せた後のデータだけを出す
 //!     （DB を読み取り専用で開いて読む。level は all / notice / warn / critical）
 //! - 設定は変更できない（読み取り専用）。モード変更などは管理者認証つきの別経路で行う
 //! - 接続相手の uid を検証する：root・ログイン中のユーザー・`status_allowed_uids` のみ
@@ -106,6 +109,61 @@ fn list_alerts(db: &Path, req: &serde_json::Value) -> Result<AlertList> {
     })
 }
 
+/// 書き出しの上限（件数・ログの大きさ）
+const MAX_EXPORT: i64 = 20_000;
+const MAX_EXPORT_BYTES: usize = 8 * 1024 * 1024;
+
+fn export(db: &Path, req: &serde_json::Value) -> Result<serde_json::Value> {
+    use kanmon_core::redact::{summarize, DomainMode, Options, Redactor};
+    use kanmon_core::scoring::Level;
+    let hours = req.get("hours").and_then(|v| v.as_i64()).unwrap_or(24).clamp(1, 24 * 30);
+    let min = req.get("min_level").and_then(|v| v.as_str()).and_then(Level::parse).unwrap_or(Level::Notice);
+    let levels: Vec<&str> = ["info", "notice", "warn", "critical"]
+        .into_iter()
+        .filter(|l| Level::parse(l).is_some_and(|x| x >= min))
+        .collect();
+    let opts = Options {
+        domains: req
+            .get("domains")
+            .and_then(|v| v.as_str())
+            .and_then(DomainMode::parse)
+            .unwrap_or(DomainMode::Registered),
+        paths_basename: req.get("paths").and_then(|v| v.as_str()) == Some("basename"),
+        round_time: req.get("round_time").and_then(|v| v.as_bool()).unwrap_or(false),
+    };
+    let want_log = req.get("format").and_then(|v| v.as_str()) == Some("jsonl");
+    let store = kanmon_core::store::Store::open_readonly(db)?;
+    let since = chrono::Utc::now().timestamp() - hours * 3600;
+    let mut evs = store.recent_events(since, &levels, MAX_EXPORT + 1)?;
+    let mut truncated = evs.len() as i64 > MAX_EXPORT;
+    evs.truncate(MAX_EXPORT as usize);
+    evs.reverse(); // 古い順
+    let mut r = Redactor::new(opts);
+    let red: Vec<serde_json::Value> = evs.iter().map(|e| r.event(e)).collect();
+    let summary = summarize(&red, hours, min.as_str());
+    let sample: Vec<String> = red.iter().rev().take(20).map(|e| e.to_string()).collect();
+    let mut log = String::new();
+    if want_log {
+        for e in &red {
+            let line = e.to_string();
+            if log.len() + line.len() + 1 > MAX_EXPORT_BYTES {
+                truncated = true;
+                break;
+            }
+            log.push_str(&line);
+            log.push('\n');
+        }
+    }
+    Ok(serde_json::json!({
+        "count": red.len(),
+        "truncated": truncated,
+        "markdown": summary.markdown(),
+        "summary": summary,
+        "sample": sample,
+        "jsonl": if want_log { serde_json::Value::String(log) } else { serde_json::Value::Null },
+    }))
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Snapshot {
     pub version: String,
@@ -180,6 +238,14 @@ pub fn respond(req: &str, shared: &Shared) -> String {
             let Some(db) = &shared.db else { return r#"{"error":"no database"}"#.into() };
             match list_alerts(db, &parsed) {
                 Ok(l) => serde_json::to_string(&l).unwrap_or_else(|_| r#"{"error":"serialize"}"#.into()),
+                Err(e) => serde_json::json!({ "error": format!("{e:#}") }).to_string(),
+            }
+        }
+        Some("export") => {
+            shared.touch_client();
+            let Some(db) = &shared.db else { return r#"{"error":"no database"}"#.into() };
+            match export(db, &parsed) {
+                Ok(v) => v.to_string(),
                 Err(e) => serde_json::json!({ "error": format!("{e:#}") }).to_string(),
             }
         }
@@ -260,6 +326,10 @@ fn handle(mut s: UnixStream, shared: &Shared, extra: &[u32]) {
     }
     let mut out = respond(&line, shared);
     out.push('\n');
+    if out.len() > 64 * 1024 {
+        // 書き出しは大きいので、書き込みの待ちを長くする
+        let _ = s.set_write_timeout(Some(Duration::from_secs(30)));
+    }
     let _ = s.write_all(out.as_bytes());
 }
 
@@ -422,5 +492,51 @@ mod tests {
         assert!(serve(&f, sh, vec![]).is_err());
         assert!(f.exists());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn export_redacts_inside_daemon() {
+        let dir = std::env::temp_dir().join(format!("kanmon-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("kanmon.db");
+        let _ = std::fs::remove_file(&db);
+        {
+            let st = kanmon_core::store::Store::open(&db).unwrap();
+            let now = chrono::Utc::now().timestamp();
+            for (i, lv) in ["notice", "warn", "info"].iter().enumerate() {
+                let v = serde_json::json!({
+                    "@timestamp": "2026-11-19T18:16:12.123+09:00", "event": {"id": format!("x{i}")},
+                    "host": {"name": "alice-mbp.local"},
+                    "network": {"kind": "connect", "scope": "internet"},
+                    "process": {"name": "helper", "executable": "/Users/alice/bin/helper", "user": "alice",
+                        "args": ["helper", "--token", "secret123"]},
+                    "destination": {"ip": "8.8.4.4", "port": 443, "domain": "a.b.example.com"},
+                    "kanmon": {"level": lv, "score": 40, "signals": [{"id": "R1", "description": "住宅用", "points": 25}]}
+                });
+                st.insert_event(&v, now - i as i64).unwrap();
+            }
+        }
+        let sh = Shared::with_db(Snapshot::default(), Some(db.clone()));
+        let out = respond(r#"{"cmd":"export","hours":24,"min_level":"notice","format":"jsonl"}"#, &sh);
+        for leak in ["alice", "8.8.4.4", "secret123", "a.b.example"] {
+            assert!(!out.contains(leak), "{leak} が残っている: {out}");
+        }
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["count"], 2, "info は含めない");
+        assert_eq!(v["jsonl"].as_str().unwrap().lines().count(), 2);
+        assert!(v["markdown"].as_str().unwrap().contains("| R1 | 2 | 住宅用 |"));
+        // 既定（集計だけ）はログを返さない
+        let v: serde_json::Value =
+            serde_json::from_str(&respond(r#"{"cmd":"export","min_level":"info"}"#, &sh)).unwrap();
+        assert_eq!(v["count"], 3);
+        assert!(v["jsonl"].is_null());
+        assert_eq!(v["sample"].as_array().unwrap().len(), 3);
+        // Swift 側と同じ形か（取り決めのフィクスチャ）
+        let fx: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/status-export.json")).unwrap();
+        for k in ["count", "truncated", "markdown", "sample", "jsonl"] {
+            assert!(fx.get(k).is_some() && v.get(k).is_some(), "{k}");
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

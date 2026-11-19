@@ -103,3 +103,33 @@ enum Fmt {
         return f.string(from: d)
     }
 }
+
+/// 書き出しの条件（kanmond の `{"cmd":"export"}` へ渡す）
+struct ExportRequest: Equatable {
+    var hours = 24
+    var minLevel = "notice"
+    /// summary（集計の表）/ jsonl（伏せたログ）
+    var format = "summary"
+    /// keep / registered / mask
+    var domains = "registered"
+    var pathsBasename = false
+    var roundTime = false
+
+    func line() -> String {
+        let obj: [String: Any] = [
+            "cmd": "export", "hours": hours, "min_level": minLevel, "format": format,
+            "domains": domains, "paths": pathsBasename ? "basename" : "full", "round_time": roundTime,
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])) ?? Data()
+        return (String(data: data, encoding: .utf8) ?? "{}") + "\n"
+    }
+}
+
+/// 書き出しの結果（伏せ済み）
+struct ExportResult: Decodable {
+    let count: Int
+    let truncated: Bool
+    let markdown: String
+    let sample: [String]
+    let jsonl: String?
+}

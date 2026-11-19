@@ -148,6 +148,16 @@ kanmonctl inspect --file ./pkg-1.1.whl --base-file ./pkg-1.0.whl --detections �
 ```
 It downloads the given version and the previous one from the registry (PyPI or npm), verifies their hashes, and reads only what was added. Exit code is 2 for warn and 3 for critical, so it can gate CI or an update. A single trait scores low; combinations such as "runs automatically + sends somewhere" score high. Details (Japanese): [docs/inspect.md](docs/inspect.md).
 
+## Share logs (articles, issues)
+On macOS, the menu bar's "書き出す…" (Export…) writes out events with IP addresses, host names, user names, home paths and command arguments masked. Pick the period, level and how to treat domains, check the preview, then copy the Markdown summary table or save the masked log. Masking happens inside kanmond, so the app never receives the raw values.
+
+From the command line (Linux too):
+```bash
+sudo kanmonctl export --summary                  # summary table (Markdown); no IPs, domains or paths
+sudo kanmonctl export --hours 24 > shared.jsonl  # masked log; add --domains mask to hide domains entirely
+```
+Equal values get equal tokens (`IP-1`, `host-1`, `USER-1`, …). Loopback and documentation addresses are kept. Only well-known shapes are masked, so file names that contain a project name, for example, stay as they are. Review the output before sharing it.
+
 ## Roadmap
 - [x] **v0.1** Monitoring, detection and alerts on both OSes; YAML rules, replay, beacon scoring, threat intel
 - [x] macOS menu bar app (Kanmon.app) and status socket

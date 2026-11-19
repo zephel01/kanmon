@@ -63,6 +63,28 @@ enum StatusClient {
         }
     }
 
+    /// 共有用の書き出し（v0.5.3）。伏せる処理は kanmond（root）の中で行われ、ここには伏せた後のデータだけが来る
+    static func export(path: String = defaultPath, request r: ExportRequest) -> Result<ExportResult, Failure> {
+        let data: Data
+        switch request(path: path, line: r.line(), timeout: 30, maxBytes: 32 * 1024 * 1024) {
+        case .success(let d): data = d
+        case .failure(let e): return .failure(e)
+        }
+        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let err = obj["error"] as? String {
+            return .failure(.server(err == "unknown command" ? "kanmond が古い版です（書き出しは v0.5.3 以降）" : err))
+        }
+        do {
+            return .success(try decodeExport(data))
+        } catch {
+            return .failure(.decode(String(describing: error)))
+        }
+    }
+
+    static func decodeExport(_ data: Data) throws -> ExportResult {
+        try JSONDecoder().decode(ExportResult.self, from: data)
+    }
+
     static func decodeAlertList(_ data: Data) throws -> AlertList {
         try JSONDecoder().decode(AlertList.self, from: data)
     }
@@ -72,12 +94,14 @@ enum StatusClient {
         try JSONDecoder().decode(Snapshot.self, from: data)
     }
 
-    private static func request(path: String, line: String) -> Result<Data, Failure> {
+    private static func request(path: String, line: String, timeout: Int = 2, maxBytes: Int = 8 * 1024 * 1024)
+        -> Result<Data, Failure>
+    {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { return .failure(.socket(errno)) }
         defer { close(fd) }
 
-        var tv = timeval(tv_sec: 2, tv_usec: 0)
+        var tv = timeval(tv_sec: timeout, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
@@ -102,7 +126,7 @@ enum StatusClient {
 
         var out = Data()
         var buf = [UInt8](repeating: 0, count: 64 * 1024)
-        while out.count < 8 * 1024 * 1024 {
+        while out.count < maxBytes {
             let n = buf.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
             if n <= 0 { break }
             out.append(contentsOf: buf[0..<n])

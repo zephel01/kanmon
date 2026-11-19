@@ -19,6 +19,7 @@ pub mod names;
 pub mod netclass;
 pub mod persist;
 pub mod profile;
+pub mod redact;
 pub mod rotate;
 pub mod rules;
 pub mod scoring;

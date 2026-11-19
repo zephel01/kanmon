@@ -47,4 +47,25 @@ final class SnapshotDecodeTests: XCTestCase {
         XCTAssertNil(s.learningUntil)
         XCTAssertTrue(s.counts24h.isEmpty)
     }
+
+    func testDecodesExport() throws {
+        let r = try StatusClient.decodeExport(try fixture("status-export.json"))
+        XCTAssertEqual(r.count, 2)
+        XCTAssertFalse(r.truncated)
+        XCTAssertTrue(r.markdown.contains("| notice | 2 |"))
+        XCTAssertEqual(r.sample.count, 1)
+        XCTAssertNil(r.jsonl)
+    }
+
+    func testExportRequestLine() throws {
+        var q = ExportRequest()
+        q.format = "jsonl"
+        q.pathsBasename = true
+        let obj = try JSONSerialization.jsonObject(with: Data(q.line().utf8)) as? [String: Any]
+        XCTAssertEqual(obj?["cmd"] as? String, "export")
+        XCTAssertEqual(obj?["format"] as? String, "jsonl")
+        XCTAssertEqual(obj?["paths"] as? String, "basename")
+        XCTAssertEqual(obj?["min_level"] as? String, "notice")
+        XCTAssertTrue(q.line().hasSuffix("\n"))
+    }
 }
