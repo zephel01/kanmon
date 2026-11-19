@@ -205,6 +205,12 @@ pub fn resolver_change(old: &[IpAddr], new: &[IpAddr]) -> Option<ResolverChange>
 
 /// 公開ドメインなのに、ループバック・プライベートの IP が返っている答えを返す。
 /// 0.0.0.0 / `::`（広告ブロック等のシンクホール）と、ローカル用の名前は対象外。
+/// ローカルの IP の答えが、DoH（公開の DNS）でも同じか。同じなら、ドメインの持ち主が
+/// その記録を公開している（使われなくなった広告のドメイン等）。手元の経路での書き換えではない
+pub fn private_published(local: &[IpAddr], doh: &[IpAddr]) -> bool {
+    !local.is_empty() && local.iter().all(|ip| doh.contains(ip))
+}
+
 pub fn private_answers(qname: &str, ips: &[IpAddr], extra_ok_suffixes: &[String]) -> Vec<IpAddr> {
     let q = qname.trim_end_matches('.').to_ascii_lowercase();
     if !q.contains('.')
@@ -355,6 +361,12 @@ mod tests {
         assert_eq!(private_answers("api.example.com", &[ip("127.0.0.1")], &ok), vec![ip("127.0.0.1")]);
         assert_eq!(private_answers("api.example.com", &[ip("10.0.0.5"), ip("203.0.113.1")], &ok), vec![ip("10.0.0.5")]);
         assert!(private_answers("ads.example.com", &[ip("0.0.0.0")], &ok).is_empty());
+        // DoH でも同じローカルの IP なら、持ち主が公開している記録
+        assert!(private_published(&[ip("127.0.0.1")], &[ip("127.0.0.1")]));
+        assert!(private_published(&[ip("192.168.18.7")], &[ip("192.168.18.7"), ip("10.0.0.1")]));
+        assert!(!private_published(&[ip("127.0.0.1")], &[ip("203.0.113.9")]));
+        assert!(!private_published(&[ip("127.0.0.1")], &[]));
+        assert!(!private_published(&[], &[ip("127.0.0.1")]));
         assert!(private_answers("nas.local", &[ip("192.168.1.2")], &ok).is_empty());
         assert!(private_answers("box.tail1234.ts.net", &[ip("100.101.1.2")], &ok).is_empty());
         assert!(private_answers("git.corp.example.co.jp", &[ip("10.1.1.1")], &ok).is_empty());

@@ -277,7 +277,15 @@ pub fn summarize(events: &[Value], hours: i64, min_level: &str) -> Summary {
             }
         }
         // プロセス名は、ホームの下の自作のバイナリなどで名前が分かることがあるので、伏せた後の名前で数える
-        let name = e.pointer("/process/name").and_then(|x| x.as_str()).unwrap_or("?").to_string();
+        let name = match e.pointer("/process/name").and_then(|x| x.as_str()) {
+            Some(n) => n.to_string(),
+            // DNS の改ざん検知・居座りの走査は、プロセスに結び付かない
+            None => match e.pointer("/network/kind").and_then(|x| x.as_str()) {
+                Some("dns_integrity") => "（DNS の観測）".to_string(),
+                Some("persistence") => "（居座りの走査）".to_string(),
+                _ => "（不明）".to_string(),
+            },
+        };
         *procs.entry(name).or_insert(0) += 1;
         if let Some(t) = e.pointer("/kanmon/net_type").and_then(|x| x.as_str()) {
             *s.by_net_type.entry(t.into()).or_insert(0) += 1;
@@ -410,5 +418,8 @@ mod tests {
         assert!(md.contains("| R1 | 2 | 住宅用 |"), "{md}");
         assert!(md.contains("| helper | 2 |"));
         assert!(!md.contains("8.8.8.8") && !md.contains("example"));
+        let dns = json!({"network": {"kind": "dns_integrity"}, "kanmon": {"level": "notice"}});
+        let s = summarize(&[dns], 24, "notice");
+        assert_eq!(s.by_process, vec![("（DNS の観測）".to_string(), 1)]);
     }
 }

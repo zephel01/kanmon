@@ -88,7 +88,8 @@ pub struct File {
 /// DNS の改ざん検知で分かった事実（`kanmon.dns.*`）
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DnsFacts {
-    /// hosts_changed / resolver_changed / crosscheck_mismatch / private_answer / conflicting_answer / unexpected_resolver
+    /// hosts_changed / resolver_changed / crosscheck_mismatch / private_answer / private_answer_published /
+    /// conflicting_answer / unexpected_resolver
     pub finding: String,
     /// 監視リストのドメインが関わる
     #[serde(default)]
@@ -115,6 +116,9 @@ pub struct DnsFacts {
     /// 答えの IP ごとの TLS 証明書の確認結果（N3）。例 `203.0.113.5: 証明書の検証に失敗（…）`
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tls: Vec<String>,
+    /// 応答の TTL（秒）。リバインディングは短い TTL で答えを切り替えるので、判断の手がかりになる
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

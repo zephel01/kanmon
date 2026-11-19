@@ -66,9 +66,10 @@ detections:
 | `destination.domain_source` | 名前の出どころ：`sni`（その接続の TLS ClientHello）/ `dns`（DNS 応答で引かれた名前）/ `sni_ip`（同じ IP への別の接続の SNI） |
 | `dns.question.name` / `dns.resolved_ip` | DNS の問い合わせ名と答え（`dns_integrity` のみ） |
 | `file.path` | 対象のファイル（hosts の書き換え） |
-| `kanmon.dns.finding` | DNS の改ざん検知の種類：`hosts_changed` / `resolver_changed` / `crosscheck_mismatch` / `private_answer` / `conflicting_answer` / `unexpected_resolver` |
+| `kanmon.dns.finding` | DNS の改ざん検知の種類：`hosts_changed` / `resolver_changed` / `crosscheck_mismatch` / `private_answer` / `private_answer_published`（DoH でも同じローカルの IP。持ち主が公開した記録で、同梱ルールは点を付けない）/ `conflicting_answer` / `unexpected_resolver` |
 | `kanmon.dns.watched` / `redirected` / `unknown_public` | 監視リストのドメインが関わる / hosts で他所へ向けられている / 見慣れない公開 DNS |
-| `kanmon.dns.added` / `removed` / `added_scope` / `server` / `other` / `tls` | 追加・削除された行や DNS サーバー、追加先の範囲、応答した DNS サーバー、比較相手の答え、答えの IP ごとの証明書の確認結果（N3） |
+| `kanmon.dns.added` / `removed` / `added_scope` / `server` / `other` / `tls` | 追加・削除された行や DNS サーバー、追加先の範囲、応答した DNS サーバー、比較相手の答え（N4 では DoH の答え）、答えの IP ごとの証明書の確認結果（N3） |
+| `kanmon.dns.ttl` | 応答の TTL（秒、N4）。リバインディングは短い TTL で答えを切り替える |
 | `kanmon.ti_match` / `ti_source` | 脅威インテルに一致したか、どのリストか |
 | `kanmon.dest_first_for_process` / `port_first_for_process` / `listen_new` | ベースラインとの差分（学習期間中は常に false） |
 | `kanmon.profile.stable` / `new_dest` / `known_dests` / `quiet_days` | いつもの形（宛先）：形が安定しているか、安定しているのに初めての登録ドメインか、知っている宛先の数、最後に新しい宛先が増えてからの日数 |
@@ -140,7 +141,7 @@ detections:
 | N1 / N1w / N1r | hosts が書き換えられた / 監視リストのドメインが含まれる / それが別のサーバーへ向けられている | +30 / +40 / +60 |
 | N2 / N2p | DNS サーバーの設定が変わった（Wi-Fi の切り替えでも起きる）/ 見慣れない公開 DNS が設定された | +10 / +50 |
 | N3 | 監視リストのドメインの答えが DoH で引き直した答えと食い違い、しかも答えの IP がそのドメインの正しい TLS 証明書を出さない | +70 |
-| N4 / N4w | 公開ドメインがループバック・社内の IP に解決された / それが監視リストのドメイン | +30 / +30 |
+| N4 / N4w | 公開ドメインがループバック・社内の IP に解決された / それが監視リストのドメイン。DoH でも同じ答えなら持ち主が公開した記録として `private_answer_published`（点なし）にする | +30 / +30 |
 | N5 / N5w | 同じ問い合わせに中身の違う応答が届いた / それが監視リストのドメイン | +40 / +30 |
 | N6 / N6u | 設定にない DNS サーバーから応答 / それがよく使われる公開 DNS でもない（記録のみ） | +10 / +10 |
 

@@ -47,6 +47,7 @@ fn finding_label(f: &str) -> &str {
         "resolver_changed" => "DNS サーバーの設定が変わった",
         "crosscheck_mismatch" => "答えのサーバーが正しい証明書を出さない",
         "private_answer" => "公開ドメインがローカルの IP に解決された",
+        "private_answer_published" => "ローカルの IP を公開しているドメイン（DoH でも同じ答え）",
         "conflicting_answer" => "同じ問い合わせに違う応答が届いた",
         "unexpected_resolver" => "設定にない DNS サーバーから応答",
         _ => f,
@@ -92,7 +93,11 @@ fn dns_text(v: &Value, level: &str, score: i64) -> (String, String) {
     }
     let other = strs(v, "kanmon.dns.other");
     if !other.is_empty() {
-        let label = if f == "crosscheck_mismatch" { "暗号化 DNS の答え" } else { "もう一方の答え" };
+        let label = if f.starts_with("crosscheck") || f.starts_with("private_answer") {
+            "暗号化 DNS（DoH）の答え"
+        } else {
+            "もう一方の答え"
+        };
         lines.push(format!("  {label}: {}", other.join(", ")));
     }
     for t in strs(v, "kanmon.dns.tls") {
@@ -100,6 +105,9 @@ fn dns_text(v: &Value, level: &str, score: i64) -> (String, String) {
     }
     if let Some(sv) = s(v, "kanmon.dns.server") {
         lines.push(format!("  DNS サーバー: {sv}"));
+    }
+    if let Some(t) = get_path(v, "kanmon.dns.ttl").and_then(|x| x.as_u64()) {
+        lines.push(format!("  TTL: {t} 秒"));
     }
     for (k, label) in [("kanmon.dns.added", "追加"), ("kanmon.dns.removed", "削除")] {
         let a = strs(v, k);
@@ -319,6 +327,18 @@ pub fn alert_text(v: &Value) -> (String, String) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn private_published_text() {
+        let v = json!({"network": {"kind": "dns_integrity"},
+            "dns": {"question": {"name": "farm.plista.com"}, "resolved_ip": ["127.0.0.1"]},
+            "kanmon": {"level": "info", "score": 0, "dns": {"finding": "private_answer_published",
+                "server": "127.0.2.2", "other": ["127.0.0.1"], "ttl": 170713}}});
+        let (title, body) = alert_text(&v);
+        assert!(title.contains("ローカルの IP を公開しているドメイン"), "{title}");
+        assert!(body.contains("暗号化 DNS（DoH）の答え: 127.0.0.1"), "{body}");
+        assert!(body.contains("TTL: 170713 秒"), "{body}");
+    }
 
     #[test]
     fn as_line_in_body() {

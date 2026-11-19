@@ -74,6 +74,9 @@ pub struct Monitor {
     /// ドメイン → （最後に DoH で引いた時刻, DoH で見た IP の履歴）
     doh_state: HashMap<String, (Instant, Vec<std::net::IpAddr>)>,
     doh_inflight: HashSet<String>,
+    priv_tx: Sender<PrivResult>,
+    priv_rx: Receiver<PrivResult>,
+    priv_inflight: HashSet<String>,
     doh_fail_logged: Option<Instant>,
     /// 同じ検知を何度も出さないための最終発報時刻
     dns_emitted: HashMap<String, i64>,
@@ -105,6 +108,8 @@ fn dir_mtime(p: &std::path::Path) -> Option<std::time::SystemTime> {
 
 /// （ドメイン, 受け身で見た答え, DoH と証明書の確認結果）
 type DohResult = (String, Vec<std::net::IpAddr>, std::result::Result<crate::dnswatch::Crosscheck, String>);
+/// N4 の引き直し：（名前, ローカルの答え, 応答した DNS サーバー, 監視リストか, TTL, DoH の答え）
+type PrivResult = (String, Vec<IpAddr>, IpAddr, bool, u32, std::result::Result<Vec<IpAddr>, String>);
 
 pub(crate) fn hostname() -> String {
     let mut buf = [0u8; 256];
@@ -219,6 +224,7 @@ impl Monitor {
         let obs_rx = obs_rx.map(|(rx, _)| rx);
         let known_resolvers = crate::dnswatch::read_resolvers(&cfg.dns.resolv_conf);
         let (doh_tx, doh_rx) = std::sync::mpsc::channel();
+        let (priv_tx, priv_rx) = std::sync::mpsc::channel();
         let (persist_tx, persist_rx) = std::sync::mpsc::channel();
         let persist_recent: Vec<kanmon_core::persist::Recent> = store
             .meta_get("persist.recent")
@@ -267,6 +273,9 @@ impl Monitor {
             doh_rx,
             doh_state: HashMap::new(),
             doh_inflight: HashSet::new(),
+            priv_tx,
+            priv_rx,
+            priv_inflight: HashSet::new(),
             doh_fail_logged: None,
             dns_emitted: HashMap::new(),
             volume: Default::default(),
@@ -440,6 +449,7 @@ impl Monitor {
                 self.dns_check();
             }
             self.drain_doh();
+            self.drain_private();
         }
         // 居座りの走査（別スレッドで歩き、結果を前回と比べる）
         if self.cfg.persistence.enabled {
@@ -1053,16 +1063,29 @@ impl Monitor {
             };
             self.emit_dns(facts, Some(q.clone()), &cur, None, format!("conflict|{q}"));
         }
-        // N4：公開ドメインがローカルの IP に解決
+        // N4：公開ドメインがローカルの IP に解決。DoH でも引き直し、同じ答えならドメインの持ち主が
+        // 公開している記録（使われなくなった広告のドメイン等）として記録だけにする（v0.5.4）
         let local_ips = dnsguard::private_answers(&q, &ips, &self.cfg.dns.private_ok_suffixes);
         if !local_ips.is_empty() {
-            let facts = ev::DnsFacts {
-                finding: "private_answer".into(),
-                watched,
-                server: Some(server.to_string()),
-                ..Default::default()
-            };
-            self.emit_dns(facts, Some(q.clone()), &local_ips, None, format!("private|{q}"));
+            let dedup = format!("private|{q}");
+            let recently = self.dns_emitted.get(&dedup).is_some_and(|t| now - *t < 3600);
+            if !recently && !self.priv_inflight.contains(&q) {
+                if self.cfg.dns.crosscheck && self.priv_inflight.len() < 4 {
+                    self.priv_inflight.insert(q.clone());
+                    let url = self.cfg.dns.doh_url.clone();
+                    let tx = self.priv_tx.clone();
+                    let name = q.clone();
+                    let spawned = std::thread::Builder::new().name("kanmon-doh-n4".into()).spawn(move || {
+                        let r = crate::dnswatch::doh_lookup(&url, &name).map_err(|e| format!("{e:#}"));
+                        let _ = tx.send((name, local_ips, server, watched, ttl, r));
+                    });
+                    if spawned.is_err() {
+                        self.priv_inflight.remove(&q);
+                    }
+                } else {
+                    self.emit_private(q.clone(), local_ips, server, watched, ttl, None);
+                }
+            }
         }
         // N6：設定にない DNS サーバーからの応答
         if dnsguard::unexpected_resolver(&server, &self.known_resolvers) {
@@ -1105,6 +1128,49 @@ impl Monitor {
         });
         if spawned.is_err() {
             logln!("DoH のスレッドを作れません");
+        }
+    }
+
+    /// N4 の結果を出す。`doh` が Some のときは DoH の答え（引き直せなかったら None）
+    fn emit_private(
+        &mut self,
+        q: String,
+        local: Vec<IpAddr>,
+        server: IpAddr,
+        watched: bool,
+        ttl: u32,
+        doh: Option<Vec<IpAddr>>,
+    ) {
+        let published = doh.as_deref().is_some_and(|d| dnsguard::private_published(&local, d));
+        let facts = ev::DnsFacts {
+            finding: if published { "private_answer_published" } else { "private_answer" }.into(),
+            watched,
+            server: Some(server.to_string()),
+            other: doh.unwrap_or_default().iter().map(|x| x.to_string()).collect(),
+            ttl: Some(ttl),
+            ..Default::default()
+        };
+        self.emit_dns(facts, Some(q.clone()), &local, None, format!("private|{q}"));
+    }
+
+    fn drain_private(&mut self) {
+        let mut done = vec![];
+        while let Ok(r) = self.priv_rx.try_recv() {
+            done.push(r);
+        }
+        for (q, local, server, watched, ttl, res) in done {
+            self.priv_inflight.remove(&q);
+            let doh = match res {
+                Ok(d) => Some(d),
+                Err(e) => {
+                    if self.doh_fail_logged.is_none_or(|t| t.elapsed() > Duration::from_secs(3600)) {
+                        self.doh_fail_logged = Some(Instant::now());
+                        logln!("DoH での引き直しに失敗（{q}。N4 として扱う）: {e}");
+                    }
+                    None
+                }
+            };
+            self.emit_private(q, local, server, watched, ttl, doh);
         }
     }
 
