@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Linux へ導入（root）。cargo build --release 済みの前提。
+# Linux へ導入（root）。cargo build --release 済みの前提（版が違えば止める）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ "$(id -u)" = 0 ] || { echo "root で実行してください"; exit 1; }
+# shellcheck source=packaging/build-check.sh
+. packaging/build-check.sh
+check_build_version . || exit 1
 install -d -m 0755 /etc/kanmon /etc/kanmon/detections
 install -d -m 0750 /var/lib/kanmon /var/log/kanmon
 install -m 0755 target/release/kanmond /usr/local/sbin/kanmond

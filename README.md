@@ -61,6 +61,7 @@ git clone https://github.com/zephel01/kanmon.git && cd kanmon
 cargo build --release
 sudo packaging/install-linux.sh
 ```
+更新するときも同じく `git pull` → `cargo build --release` → 導入スクリプトの順です。導入スクリプトは、ビルドした実行ファイルの版がリポジトリの版と違えば止まります（古いものを入れないため）。
 
 **Linux のパッケージ（.deb・.rpm）**
 [リリース](https://github.com/zephel01/kanmon/releases)から取って入れます。自動では起動しないので、設定を見てから有効にします。

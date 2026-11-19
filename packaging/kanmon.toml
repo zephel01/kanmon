@@ -36,6 +36,10 @@ keep = 5
 # "size"（サイズごと：events.jsonl.1 … .keep）/ "daily"（日付ごと：events.YYYY-MM-DD.jsonl、keep_days 日残す）
 rotate = "size"
 keep_days = 30
+# events.jsonl に書く最低のレベル。info（既定）は全部。ログが多いときは "notice" にすると記録だけの接続を書かない
+# （SQLite には保存期間ぶん全部残り、ベースラインと kanmonctl alerts は変わらない。
+#  ただし kanmonctl replay は JSONL を読むので、新しいルールを過去の info の接続に当てて試すことはできなくなる）
+min_level = "info"
 
 # kanmond の動作ログ。macOS の既定は /Library/Logs/kanmon/kanmond.log（日付ごとに kanmond.YYYY-MM-DD.log）。
 # Linux の既定は空（標準エラー → journald）

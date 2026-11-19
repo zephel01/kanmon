@@ -238,6 +238,10 @@ pub struct JsonlCfg {
     pub rotate: String,
     /// daily のときに残す日数
     pub keep_days: u32,
+    /// events.jsonl に書く最低のレベル（info / notice / warn / critical）。既定は info（全部）。
+    /// notice にすると記録だけの接続は書かない。SQLite（保存期間ぶん）には全部残り、ベースラインと alerts は変わらない。
+    /// ただし `kanmonctl replay` は JSONL を読むので、新しいルールを試せるのは書いたイベントだけになる
+    pub min_level: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -333,7 +337,14 @@ fn default_base() -> (PathBuf, PathBuf, PathBuf) {
 
 impl Default for JsonlCfg {
     fn default() -> Self {
-        Self { path: default_base().2.join("events.jsonl"), max_mb: 50, keep: 5, rotate: "size".into(), keep_days: 30 }
+        Self {
+            path: default_base().2.join("events.jsonl"),
+            max_mb: 50,
+            keep: 5,
+            rotate: "size".into(),
+            keep_days: 30,
+            min_level: "info".into(),
+        }
     }
 }
 
@@ -440,6 +451,9 @@ impl Config {
                 if c.dns.crosscheck && !c.dns.doh_url.starts_with("https://") {
                     anyhow::bail!("dns.doh_url は https:// で始めてください");
                 }
+                if kanmon_core::scoring::Level::parse(&c.jsonl.min_level).is_none() {
+                    anyhow::bail!("jsonl.min_level は info / notice / warn / critical のどれかにしてください");
+                }
                 if c.asn.enabled && c.asn.file.is_none() && !c.asn.url.starts_with("https://") {
                     anyhow::bail!("asn.url は https:// で始めてください");
                 }
@@ -460,5 +474,18 @@ mod tests {
         let c: Config = toml::from_str(t).unwrap();
         assert_eq!(c.thresholds.warn, 60);
         assert!(!c.feeds.is_empty());
+        assert_eq!(c.jsonl.min_level, "info");
+    }
+
+    #[test]
+    fn jsonl_min_level() {
+        let dir = std::env::temp_dir().join(format!("kanmon-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("k.toml");
+        std::fs::write(&p, "[jsonl]\nmin_level = \"notice\"\n").unwrap();
+        assert_eq!(Config::load(Some(&p)).unwrap().jsonl.min_level, "notice");
+        std::fs::write(&p, "[jsonl]\nmin_level = \"loud\"\n").unwrap();
+        assert!(Config::load(Some(&p)).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -265,6 +265,17 @@ s.sendall(b'{"cmd":"status"}\n'); print(s.makefile().readline().strip())
 PY
 kill $D; wait $D 2>/dev/null || true
 
+echo "[S] jsonl.min_level = notice：events.jsonl には notice 以上だけを書く"
+sed -e "s#^path = \"$W/events.jsonl\"#path = \"$W/events-min.jsonl\"\nmin_level = \"notice\"#" \
+  "$W/etc/kanmon.toml" > "$W/etc/kanmon-min.toml"
+chmod 0644 "$W/etc/kanmon-min.toml"
+"$KANMOND" --config "$W/etc/kanmon-min.toml" 2>> "$W/kanmond.log" &
+D=$!; sleep 2
+"$W/netclient" 198.51.100.8 443 1 0 1500
+python3 -c 'import socket; s=socket.socket(); s.connect(("127.0.0.1", 18090)); s.close()'
+sleep 1.5
+kill $D; wait $D 2>/dev/null || true
+
 echo
 echo "==== kanmonctl tail（notice 以上）"
 "$KANMONCTL" tail --file "$W/events.jsonl" --min-level notice --lines 200
@@ -322,8 +333,15 @@ check("R: 住宅用回線の宛先に R1、AS 4713・JP・residential", r and "R
       and r[0]["kanmon"].get("net_type") == "residential")
 ru = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "198.51.100.7")
 check("R: 一覧に無い AS は unknown で R1 なし", ru and ru[0]["kanmon"].get("net_type") == "unknown" and "R1" not in sig(ru[0]))
+mins = [json.loads(l) for l in open(sys.argv[1].replace("events.jsonl", "events-min.jsonl")) if l.strip()]
+lv = [e["kanmon"].get("level", "info") for e in mins]
+check("S: min_level = notice では info を書かず、critical は書く", "critical" in lv and "info" not in lv)
+print("  events-min.jsonl のレベル:", sorted(set(lv)), len(lv), "件")
 st2 = json.load(open(sys.argv[1].replace("events.jsonl", "status-restart.json")))
 check("I: 再起動後も直近の警告が残る", any(a["level"] == "critical" for a in st2.get("alerts", [])))
+c2 = st2.get("counts_24h", {})
+check("I: 再起動の直後から 24 時間の件数が出る（0 件にならない）", c2.get("critical", 0) >= 1 and c2.get("info", 0) >= 1)
+print("  counts_24h（再起動 2 秒後）:", c2)
 j = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "203.0.113.60")
 check("J: 203.0.113.60 に named-test.example.com（dns）", j and j[0]["destination"].get("domain") == "named-test.example.com"
       and j[0]["destination"].get("domain_source") == "dns" and j[0]["destination"].get("registered_domain") == "example.com")
