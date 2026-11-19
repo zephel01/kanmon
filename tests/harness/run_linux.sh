@@ -251,6 +251,13 @@ import socket, sys
 s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
 s.sendall(b'{"cmd":"status"}\n'); print(s.makefile().readline().strip())
 PY
+echo "[T] 共有用の書き出し（状態ソケットの export。伏せるのは kanmond の中）"
+python3 - "$W/kanmond.sock" > "$W/export.json" <<'PY'
+import socket, sys
+s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
+s.sendall(b'{"cmd":"export","hours":1,"min_level":"info","format":"jsonl","domains":"mask"}\n')
+print(s.makefile().readline().strip())
+PY
 
 kill $D; wait $D 2>/dev/null || true
 sleep 0.5
@@ -337,6 +344,15 @@ mins = [json.loads(l) for l in open(sys.argv[1].replace("events.jsonl", "events-
 lv = [e["kanmon"].get("level", "info") for e in mins]
 check("S: min_level = notice では info を書かず、critical は書く", "critical" in lv and "info" not in lv)
 print("  events-min.jsonl のレベル:", sorted(set(lv)), len(lv), "件")
+ex_raw = open(sys.argv[1].replace("events.jsonl", "export.json")).read()
+ex = json.loads(ex_raw)
+import socket as _so
+host = _so.gethostname()
+check("T: 書き出しは伏せ済み（ホスト名・引数・ドメインが残らない）", ex.get("count", 0) > 0
+      and host not in ex_raw and '"args":' not in ex_raw and "named-test.example.com" not in ex_raw
+      and "DOMAIN-" in ex_raw and len(ex.get("jsonl", "").splitlines()) == ex["count"]
+      and "| レベル | 件数 |" in ex.get("markdown", ""))
+print("  export:", ex.get("count"), "件、truncated", ex.get("truncated"))
 st2 = json.load(open(sys.argv[1].replace("events.jsonl", "status-restart.json")))
 check("I: 再起動後も直近の警告が残る", any(a["level"] == "critical" for a in st2.get("alerts", [])))
 c2 = st2.get("counts_24h", {})

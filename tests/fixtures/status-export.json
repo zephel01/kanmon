@@ -1,0 +1,30 @@
+{
+  "count": 2,
+  "truncated": false,
+  "markdown": "## kanmon の集計（直近 24 時間・notice 以上、2 件）\n\n| レベル | 件数 |\n|---|---:|\n| notice | 2 |\n",
+  "summary": {
+    "hours": 24,
+    "min_level": "notice",
+    "total": 2,
+    "by_level": {
+      "notice": 2
+    },
+    "by_rule": {
+      "R1": [
+        2,
+        "住宅用"
+      ]
+    },
+    "by_process": [
+      [
+        "helper",
+        2
+      ]
+    ],
+    "by_net_type": {}
+  },
+  "sample": [
+    "{\"destination\":{\"ip\":\"IP-1\",\"port\":443}}"
+  ],
+  "jsonl": null
+}

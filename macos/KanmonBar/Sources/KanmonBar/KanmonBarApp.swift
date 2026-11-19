@@ -136,6 +136,9 @@ struct MenuView: View {
                     .disabled(store.snapshot == nil)
                 Button("ログを表示") { store.revealLog() }
                     .disabled(store.snapshot == nil)
+                Button("書き出す…") { store.windows.showExport(path: store.socketPath) }
+                    .disabled(store.snapshot == nil)
+                    .help("IP・ホスト名などを伏せて、集計の表やログを書き出します（記事・Issue 向け）")
                 Spacer()
                 Button("終了") { NSApp.terminate(nil) }
             }

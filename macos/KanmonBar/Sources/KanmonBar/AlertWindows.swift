@@ -7,6 +7,34 @@ final class AlertWindows {
     private var open: [String: NSPanel] = [:]
     private var listWindow: NSWindow?
     private var listModel: AlertListModel?
+    private var exportWindow: NSWindow?
+    private var exportModel: ExportModel?
+
+    /// 共有用の書き出し（1 つだけ開く）
+    func showExport(path: String) {
+        if let w = exportWindow, let m = exportModel {
+            m.load()
+            NSApp.activate(ignoringOtherApps: true)
+            w.makeKeyAndOrderFront(nil)
+            return
+        }
+        let model = ExportModel(path: path)
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 620),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        w.title = "kanmon — 共有用に書き出す"
+        w.isReleasedWhenClosed = false
+        w.contentView = NSHostingView(rootView: ExportView(model: model))
+        w.center()
+        exportWindow = w
+        exportModel = model
+        model.load()
+        NSApp.activate(ignoringOtherApps: true)
+        w.makeKeyAndOrderFront(nil)
+    }
 
     /// 警告の一覧ウィンドウ（メニューの件数を押したとき）。1 つだけ開き、押したレベルに切り替える
     func showList(level: String, path: String) {
