@@ -6,6 +6,18 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-19
+### 追加
+- **Linux のパッケージ（.deb・.rpm）**をリリースに添付する。
+  - `.deb`：ubuntu-22.04 でビルド（Debian 12・Ubuntu 22.04 以降）。`.rpm`：almalinux:9 でビルド（Fedora・RHEL 9 系）。libpcap のライブラリの名前が Debian 系（`libpcap.so.0.8`）と Fedora・RHEL 系（`libpcap.so.1`）で違うため、別々に作る
+  - `/usr/sbin/kanmond`・`/usr/bin/kanmonctl`・`/etc/kanmon`（設定とルール。書き換えは更新で上書きしない）・systemd のユニット。自動では起動しない（`sudo systemctl enable --now kanmond`）
+  - CI で、作ったパッケージを Ubuntu 22.04・24.04・Debian 12・Fedora・AlmaLinux 9 のコンテナに実際に入れて確かめる
+- リリース：版に `-` が付くもの（`0.5.0-beta.1` 等）はプレリリースにする
+- Issue テンプレート「動作報告」
+
+### 変更
+- 居座りの通知の見出しで、自動起動の例を OS に合わせる（macOS は LaunchAgents・LaunchDaemons、Linux は systemd・autostart）
+
 ## [0.3.1] - 2026-11-19
 `kanmonctl inspect` を実物の悪性パッケージで評価して見方を足した。Webhook での通知。
 

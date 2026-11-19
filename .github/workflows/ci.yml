@@ -27,6 +27,60 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+  # Linux のパッケージを作り、実際にコンテナに入れて確かめる（リリースと同じ作り方）
+  package-deb:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - run: cargo build --release -p kanmond -p kanmonctl
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - run: bash .github/scripts/build-linux-packages.sh deb
+      - name: Ubuntu 22.04・24.04・Debian 12 に入れる
+        run: |
+          for img in ubuntu:22.04 ubuntu:24.04 debian:12; do
+            echo "== $img"
+            docker run --rm -v "$PWD/dist:/dist:ro" -v "$PWD/.github/scripts:/s:ro" "$img" sh /s/check-installed.sh deb
+          done
+
+  package-rpm:
+    runs-on: ubuntu-latest
+    container: almalinux:9
+    steps:
+      - name: ビルドに要るもの（libpcap-devel は CRB にある）
+        run: |
+          dnf install -y dnf-plugins-core
+          dnf config-manager --set-enabled crb
+          dnf install -y gcc libpcap-devel git
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p kanmond -p kanmonctl
+      - run: cargo install --locked cargo-generate-rpm
+      - run: bash .github/scripts/build-linux-packages.sh rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: dist/*.rpm
+
+  package-rpm-install:
+    needs: package-rpm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rpm
+          path: dist
+      - name: Fedora・AlmaLinux 9 に入れる
+        run: |
+          for img in fedora:latest almalinux:9; do
+            echo "== $img"
+            docker run --rm -v "$PWD/dist:/dist:ro" -v "$PWD/.github/scripts:/s:ro" "$img" sh /s/check-installed.sh rpm
+          done
+
   macos-app:
     runs-on: macos-latest
     steps:

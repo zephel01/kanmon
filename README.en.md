@@ -5,7 +5,7 @@
 **A per-process network monitor for macOS and Linux that you can teach new attack patterns yourself**
 
 [![CI](https://github.com/zephel01/kanmon/actions/workflows/ci.yml/badge.svg)](https://github.com/zephel01/kanmon/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 ![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)
@@ -54,6 +54,14 @@ cargo build --release
 sudo packaging/install-macos.sh     # macOS (launchd)
 sudo packaging/install-linux.sh     # Linux (systemd)
 ```
+
+Linux packages (.deb / .rpm) from the [releases](https://github.com/zephel01/kanmon/releases). They do not start the service automatically; review the config first, then enable it:
+```bash
+sudo apt install ./kanmon_0.4.0-1_amd64.deb        # Debian 12, Ubuntu 22.04 and later
+sudo dnf install ./kanmon-0.4.0-1.x86_64.rpm       # Fedora, RHEL 9 family
+sudo systemctl enable --now kanmond
+```
+Files: `/usr/sbin/kanmond`, `/usr/bin/kanmonctl`, config and rules in `/etc/kanmon` (your edits survive updates).
 
 Menu bar app (macOS 13+, no sudo, starts at login):
 ```bash

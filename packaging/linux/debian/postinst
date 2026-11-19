@@ -1,0 +1,15 @@
+#!/bin/sh
+# kanmon パッケージの導入後：データ・ログの置き場所を作り、systemd に知らせる。
+# 自動では起動しない（設定を見てから利用者が有効にする）
+set -e
+install -d -m 0750 /var/lib/kanmon /var/log/kanmon
+[ -f /etc/kanmon/blocklist.txt ] || install -m 0644 /dev/null /etc/kanmon/blocklist.txt
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if systemctl is-active --quiet kanmond; then
+    systemctl restart kanmond || true
+  else
+    echo "kanmon を入れました。起動：sudo systemctl enable --now kanmond（設定：/etc/kanmon/kanmon.toml）"
+  fi
+fi
+exit 0

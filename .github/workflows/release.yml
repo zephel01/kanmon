@@ -1,5 +1,10 @@
 name: release
-# バージョンを上げた変更が main に入ったら、タグ v<版> とリリースを作る（本文は CHANGELOG の該当節）
+# バージョンを上げた変更が main に入ったら、タグ v<版> とリリースを作る（本文は CHANGELOG の該当節）。
+# 版に - が付くもの（0.5.0-beta.1 等）はプレリリース。続けて配布物を作って上げる：
+#   Linux：kanmon_<版>-1_amd64.deb（ubuntu-22.04 でビルド。Debian 12・Ubuntu 22.04 以降）
+#          kanmon-<版>-1.x86_64.rpm（almalinux:9 でビルド。RHEL 9 系・Fedora）
+#   libpcap のライブラリの名前が Debian 系（libpcap.so.0.8）と Fedora・RHEL 系（libpcap.so.1）で違うので別々に作る
+# 配布物が既に上がっている版では何もしない（何度実行してもよい）
 on:
   push:
     branches: [main]
@@ -12,6 +17,9 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      ver: ${{ steps.v.outputs.ver }}
+      need_linux: ${{ steps.v.outputs.need_linux }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,3 +28,65 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash .github/scripts/release.sh
+      - name: 配布物が要るか
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=$(sed -n '/^\[workspace.package\]/,/^\[/ s/^version *= *"\([^"]*\)".*/\1/p' Cargo.toml | head -1)
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+          if ! gh release view "v$ver" >/dev/null 2>&1; then
+            echo "need_linux=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          assets=$(gh release view "v$ver" --json assets -q '.assets[].name')
+          if echo "$assets" | grep -q "\.deb$"; then echo "need_linux=false"; else echo "need_linux=true"; fi >> "$GITHUB_OUTPUT"
+
+  # .deb：ubuntu-22.04（glibc 2.35、libpcap.so.0.8）でビルド
+  deb:
+    needs: release
+    if: needs.release.outputs.need_linux == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.ver }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - run: cargo build --release -p kanmond -p kanmonctl
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+      - run: bash .github/scripts/build-linux-packages.sh deb
+      - name: リリースに上げる
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "v${{ needs.release.outputs.ver }}" dist/* --clobber
+
+  # .rpm：almalinux:9（glibc 2.34、libpcap.so.1。Fedora・RHEL 系の名前）でビルド
+  rpm:
+    needs: release
+    if: needs.release.outputs.need_linux == 'true'
+    runs-on: ubuntu-latest
+    container: almalinux:9
+    steps:
+      - name: ビルドに要るもの（libpcap-devel は CRB にある）
+        run: |
+          dnf install -y dnf-plugins-core
+          dnf config-manager --set-enabled crb
+          dnf install -y gcc libpcap-devel git
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.ver }}
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p kanmond -p kanmonctl
+      - run: cargo install --locked cargo-generate-rpm
+      - run: bash .github/scripts/build-linux-packages.sh rpm
+      - name: リリースに上げる
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          dnf install -y 'dnf-command(config-manager)' >/dev/null
+          dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
+          dnf install -y gh
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          gh release upload "v${{ needs.release.outputs.ver }}" dist/* --clobber -R "$GITHUB_REPOSITORY"
