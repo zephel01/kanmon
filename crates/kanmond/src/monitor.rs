@@ -44,6 +44,9 @@ pub struct Monitor {
     rules_mtime: Option<SystemTime>,
     intel: Intel,
     intel_dirty: Arc<AtomicBool>,
+    asn: Option<kanmon_core::asn::AsnDb>,
+    asn_dirty: Arc<AtomicBool>,
+    last_asn: Option<Instant>,
     notifier: Notifier,
     prev: HashSet<Key>,
     first_tick: bool,
@@ -61,6 +64,8 @@ pub struct Monitor {
     // ---- 宛先の名前付けと DNS の改ざん検知
     names: NameCache,
     obs_rx: Option<Receiver<Obs>>,
+    /// DNS・SNI の観測を始めた時刻（始められなかったら None）
+    names_since: Option<Instant>,
     conflicts: ConflictTracker,
     known_resolvers: Vec<std::net::IpAddr>,
     last_dns_check: Option<Instant>,
@@ -143,6 +148,11 @@ impl Monitor {
         };
         let intel = crate::feeds::load(&cfg);
         logln!("脅威インテル {} 件", intel.len());
+        let asn = crate::asndata::load(&cfg);
+        if let Some(db) = &asn {
+            let (a, b, c) = db.counts();
+            logln!("AS のデータ：範囲 {} 件・AS {c} 件", a + b);
+        }
         let host = cfg.host_name.clone().unwrap_or_else(hostname);
         let os = if cfg!(target_os = "macos") { "macos" } else { "linux" };
         let learning_until = (cfg.mode == "learning" && cfg.learning_days > 0)
@@ -191,10 +201,12 @@ impl Monitor {
             } else {
                 logln!("DNS・SNI の観測: {}", devs.join(", "));
             }
-            Some(rx)
+            Some((rx, !devs.is_empty()))
         } else {
             None
         };
+        let names_since = obs_rx.as_ref().and_then(|(_, ok)| ok.then(Instant::now));
+        let obs_rx = obs_rx.map(|(rx, _)| rx);
         let known_resolvers = crate::dnswatch::read_resolvers(&cfg.dns.resolv_conf);
         let (doh_tx, doh_rx) = std::sync::mpsc::channel();
         let (persist_tx, persist_rx) = std::sync::mpsc::channel();
@@ -218,6 +230,9 @@ impl Monitor {
             rules_mtime,
             intel,
             intel_dirty: Arc::new(AtomicBool::new(false)),
+            asn,
+            asn_dirty: Arc::new(AtomicBool::new(false)),
+            last_asn: None,
             notifier,
             prev: HashSet::new(),
             first_tick: true,
@@ -234,6 +249,7 @@ impl Monitor {
             last_counts: Instant::now() - Duration::from_secs(3600),
             names: NameCache::default(),
             obs_rx,
+            names_since,
             conflicts: ConflictTracker::default(),
             known_resolvers,
             last_dns_check: None,
@@ -363,6 +379,22 @@ impl Monitor {
                 crate::feeds::refresh(&cfg);
                 flag.store(true, Ordering::SeqCst);
             });
+        }
+        // AS のデータ（6 時間ごとに期限を確認。取り直しは既定 7 日ごと、別スレッド）
+        if self.cfg.asn.enabled && self.last_asn.is_none_or(|t| t.elapsed() > Duration::from_secs(6 * 3600)) {
+            self.last_asn = Some(Instant::now());
+            let cfg = self.cfg.clone();
+            let flag = self.asn_dirty.clone();
+            std::thread::spawn(move || {
+                if crate::asndata::refresh(&cfg) {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            });
+        }
+        if self.asn_dirty.swap(false, Ordering::SeqCst) {
+            if let Some(db) = crate::asndata::load(&self.cfg) {
+                self.asn = Some(db);
+            }
         }
         if self.intel_dirty.swap(false, Ordering::SeqCst) {
             self.intel = crate::feeds::load(&self.cfg);
@@ -536,6 +568,13 @@ impl Monitor {
             }
         }
 
+        if let Some(r) = s.remote {
+            self.enrich_asn(&mut e, r.ip());
+        }
+        // 名前の観測が動いていて、起動から 5 分たっている（名前の記憶がたまっている）。
+        // これが偽のときは「名前が無い」ことを判断に使わない（R2）
+        e.kanmon.names_active = self.names_since.is_some_and(|t| t.elapsed() > Duration::from_secs(300));
+
         // ---- プロセス
         let mut proc_key = String::from("unknown");
         if let Some(pid) = s.pid {
@@ -664,6 +703,7 @@ impl Monitor {
         };
         e.kanmon.mode = if learning { "learning".into() } else { self.cfg.mode.clone() };
         e.kanmon.learning = learning;
+        self.enrich_asn(&mut e, d.remote);
         let mut proc_key = format!("pid:{}", d.pid);
         if let Some((p, k)) = self.process_info(d.pid, None, now_s)? {
             e.process = p;
@@ -846,6 +886,31 @@ impl Monitor {
         Ok(first)
     }
 
+    /// 宛先の AS・登録国・回線の種類を付ける（インターネットの宛先だけ）
+    fn enrich_asn(&self, e: &mut Event, ip: std::net::IpAddr) {
+        let Some(db) = &self.asn else { return };
+        if e.network.scope.as_deref() != Some("internet") {
+            return;
+        }
+        let Some(info) = db.lookup(ip) else { return };
+        e.kanmon.net_type = Some(
+            kanmon_core::asn::net_type(
+                info.number,
+                self.dets.list("cloud_asns"),
+                self.dets.list("cdn_asns"),
+                self.dets.list("residential_asns"),
+            )
+            .to_string(),
+        );
+        if let Some(d) = e.destination.as_mut() {
+            d.as_ = Some(ev::AsField {
+                number: info.number,
+                organization: (!info.name.is_empty()).then(|| ev::AsOrg { name: info.name.clone() }),
+            });
+            d.geo = info.country.map(|c| ev::GeoField { country_iso_code: c });
+        }
+    }
+
     /// 接続のイベントに「いつもの形」との違いを付ける。`suppress`（学習期間・起動時の既存の接続）は記録だけ
     fn profile_connect(&mut self, e: &mut Event, proc_key: &str, now: i64, suppress: bool) -> Result<()> {
         use chrono::Timelike;
@@ -874,6 +939,26 @@ impl Monitor {
             f.quiet_days = st.newest.map(|n| profile::days(now - n));
             f.new_dest = first && f.stable && !suppress;
             touched = true;
+        }
+
+        // 宛先の AS（名前が付かない接続も含む。安定の条件は宛先と同じ）
+        let asn = e.destination.as_ref().and_then(|d| d.as_.as_ref()).map(|a| a.number);
+        if let Some(asn) = asn {
+            let st = self.store.baseline_stats(proc_key, "pasn")?;
+            let first = self.profile_touch(proc_key, &asn.to_string(), "pasn", now)?;
+            let stable = profile::stable(
+                age,
+                &st,
+                now,
+                pc.min_age_days as i64 * DAY,
+                pc.quiet_days as i64 * DAY,
+                pc.max_dests as i64,
+            );
+            if first && stable && !suppress {
+                f.new_asn = true;
+                f.asn = Some(asn);
+                touched = true;
+            }
         }
 
         // 時間帯（観測が長いプロセスで、初めての時間帯）

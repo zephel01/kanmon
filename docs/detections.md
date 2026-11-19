@@ -74,6 +74,11 @@ detections:
 | `kanmon.profile.stable` / `new_dest` / `known_dests` / `quiet_days` | いつもの形（宛先）：形が安定しているか、安定しているのに初めての登録ドメインか、知っている宛先の数、最後に新しい宛先が増えてからの日数 |
 | `kanmon.profile.new_hour` / `hour` | いつもの形（時間帯）：観測 7 日以上のプロセスが、初めての時間帯（0〜23）に通信した |
 | `kanmon.profile.new_child` / `parent` | いつもの形（親子）：子の種類が安定している親が、初めての子を起動し、その子が通信した |
+| `kanmon.profile.new_asn` / `asn` | いつもの形（AS）：宛先の AS が安定しているプロセスが、初めての AS へ（v0.5.1） |
+| `destination.as.number` / `destination.as.organization.name` | 宛先の AS 番号と名前（AS のデータがあるときだけ。名前はクラウド・CDN・住宅用の一覧にある AS だけ） |
+| `destination.geo.country_iso_code` | 宛先の AS の登録国。**記録だけで、同梱ルールは点数に使わない**（踏み台を国内に置かれると当てにならない） |
+| `kanmon.net_type` | 宛先の回線の種類：`cloud` / `cdn` / `residential` / `unknown`（`22-asn.yaml` の `cloud_asns`・`cdn_asns`・`residential_asns` で決まる。一覧に無ければ `unknown`） |
+| `kanmon.names_active` | DNS・SNI の観測が動いていて、起動から 5 分たっている。偽のときは「名前が無い」を判断に使わない |
 | `kanmon.profile.volume_ratio` / `volume_max` | いつもの形（送信量、`bytes_report`）：今回 ÷ これまでの最大、これまでの最大（バイト） |
 | `kanmon.dga_score` | 自動生成ドメインらしさ（0〜1、ドメインがあるときだけ） |
 | `kanmon.beacon.score` / `n` / `median_interval_s` / `mad_s` | ビーコン（`beacon_report` のみ） |
@@ -106,6 +111,9 @@ detections:
 | A2b | いつもの形：いつもと違う子が起動されて通信 | +10 |
 | A3 | いつもの形：いつもの送信量の 10 倍以上（10MB 以上のとき。ブラウザは除く） | +25 |
 | A4 | いつもの形：観測 7 日以上のプロセスが、使ったことのない時間帯に通信 | +10 |
+| A5 | いつもの形：いつも同じ AS にしかつながないプロセスが、初めての AS へ（ブラウザは除く） | +10 |
+| R1 | ブラウザ・P2P 以外が、住宅用回線の IP へ直接つないだ（`22-asn.yaml`） | +25 |
+| R2 | 名前の観測が動いているのに、ブラウザ・P2P 以外が名前を引かずにインターネットの IP へ直結（DNS・NTP・起動時の既存の接続は除く） | +10 |
 
 ### 開発者を狙う手口（`40-developer.yaml`）
 | ID | 内容 | 点 |

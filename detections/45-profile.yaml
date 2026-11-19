@@ -58,3 +58,18 @@ detections:
     description: いつも使わない時間帯に通信
     kinds: [connect]
     when: { field: kanmon.profile.new_hour, op: eq, value: true }
+
+  - id: A5
+    name: profile_new_asn
+    points: 10
+    # v0.5.1。いつも同じ事業者（AS）にしかつながないプロセスが、初めての AS へ。
+    # 名前の付かない接続でも見られる。AS のデータが無いときは立たない
+    description: いつも同じ AS にしかつながないプロセスが、初めての AS へ
+    kinds: [connect]
+    when:
+      all:
+        - { field: kanmon.profile.new_asn, op: eq, value: true }
+        - not:
+            any:
+              - { field: process.name, op: in, value: "@browsers", ci: true }
+              - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }

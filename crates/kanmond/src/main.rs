@@ -17,6 +17,7 @@ macro_rules! logln {
     };
 }
 
+mod asndata;
 mod capture;
 mod config;
 mod dnswatch;
