@@ -3,12 +3,18 @@
 #   check-installed.sh deb|rpm   （/dist にパッケージがあること）
 set -eu
 kind=$1
+# ミラーへの接続が一時的に切れることがある（2026-11-19 に archive.ubuntu.com で失敗）ので、待ち時間を区切って取り直す
+APT="-o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
 if [ "$kind" = deb ]; then
-  apt-get update -qq
-  apt-get install -y -qq /dist/*.deb
+  n=0
+  until apt-get $APT update -qq; do
+    n=$((n + 1)); [ "$n" -ge 3 ] && exit 1
+    echo "apt-get update に失敗。${n} 回目の取り直し" >&2; sleep 10
+  done
+  apt-get $APT install -y -qq /dist/*.deb
   unit=/lib/systemd/system/kanmond.service
 else
-  dnf install -y -q /dist/*.rpm
+  dnf install -y -q --setopt=retries=5 --setopt=timeout=30 /dist/*.rpm
   unit=/usr/lib/systemd/system/kanmond.service
 fi
 # 起動できる（共有ライブラリ・glibc の版が足りる）
