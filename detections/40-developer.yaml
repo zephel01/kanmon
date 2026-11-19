@@ -41,6 +41,8 @@ lists:
   ai_official: [anthropic.com, claude.ai, claude.com, openai.com, chatgpt.com, googleapis.com, google.com, x.ai,
                 grok.com, cursor.sh, cursor.com, github.com, githubusercontent.com, sentry.io, statsig.com,
                 datadoghq.com, npmjs.org]
+  # 公式のドメインのうち、公開サフィックスの一覧（PSL）に載っているもの。登録ドメインでは比べられないので末尾で見る
+  ai_official_suffixes: [.claudeusercontent.com]
   scripting:
     [node, bun, deno, python, python2, python3, ruby, perl, php, osascript, sh, bash, zsh, dash, pwsh, powershell]
   # ブロックチェーンの公開 RPC（登録ドメイン）。C2 の連絡先を置き場から読む手口（ChainDrop・keyv 等）で使われた。
@@ -206,8 +208,12 @@ detections:
       all:
         - { field: network.scope, op: eq, value: internet }
         - { field: process.name, op: in, value: "@ai_clis", ci: true }
+        # CLI だけを見る。デスクトップアプリ（Claude.app 等）は同じ名前でも Web を取りに行く
+        - not: { field: process.executable, op: contains, value: ".app/Contents/" }
         - { field: destination.registered_domain, op: exists }
         - { field: destination.registered_domain, op: not_in, value: "@ai_official", ci: true }
+        # 公開サフィックス扱いの公式のドメイン（登録ドメインがサブドメインごとになる）は末尾で見る
+        - not: { field: destination.domain, op: suffix, value: "@ai_official_suffixes", ci: true }
 
   - id: D9s
     name: exfil_service_from_script

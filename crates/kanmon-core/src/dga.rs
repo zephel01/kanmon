@@ -74,10 +74,25 @@ pub struct DgaFeatures {
     pub common_bigram_ratio: f64,
 }
 
+/// UUID の形（8-4-4-4-12 の 16 進）。クラウドの実行環境・CDN が名前に使う。DGA は登録できるドメインを
+/// 作るもので、この形にはならない
+fn is_uuid(label: &str) -> bool {
+    let parts: Vec<&str> = label.split('-').collect();
+    parts.len() == 5
+        && parts.iter().zip([8, 4, 4, 4, 12]).all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 pub fn features(host: &str) -> Option<DgaFeatures> {
     let label = label_of(host)?;
-    // ハイフンで区切られた語は普通の命名が多いので除いて評価
-    let core: Vec<u8> = label.bytes().filter(|b| *b != b'-').collect();
+    if is_uuid(&label) {
+        return None;
+    }
+    // ハイフンで区切られた語は普通の命名が多いので除いて評価。数字だけの区切り（Cloud Run の
+    // 「語-語-数字」のプロジェクト番号等）は外す。数字だけのラベルは従来どおり評価する
+    let tokens: Vec<&str> = label.split('-').filter(|t| !t.is_empty()).collect();
+    let words: Vec<&str> = tokens.iter().copied().filter(|t| !t.bytes().all(|b| b.is_ascii_digit())).collect();
+    let kept = if words.is_empty() { tokens } else { words };
+    let core: Vec<u8> = kept.concat().into_bytes();
     if core.is_empty() {
         return None;
     }
@@ -119,6 +134,21 @@ mod tests {
     fn registered() {
         assert_eq!(registered_domain("a.b.example.co.jp").as_deref(), Some("example.co.jp"));
         assert_eq!(registered_domain("WWW.Google.com.").as_deref(), Some("google.com"));
+    }
+
+    #[test]
+    fn cloud_names_low() {
+        // 実機の誤検知：Cloud Run の名前とプロジェクト番号、UUID のサブドメイン
+        for d in [
+            "antigravity-cli-auto-updater-974169037036.us-central1.run.app",
+            "df8392c1-ca63-44c2-bc08-242de938102d.frame.claudeusercontent.com",
+        ] {
+            assert!(score(d) < 0.7, "{d}: {}", score(d));
+        }
+        assert!(is_uuid("df8392c1-ca63-44c2-bc08-242de938102d"));
+        assert!(!is_uuid("df8392c1-ca63-44c2-bc08"));
+        // 数字を混ぜたでたらめな名前は引き続き高い
+        assert!(score("xkq9zt7vbw3p.com") >= 0.7, "{}", score("xkq9zt7vbw3p.com"));
     }
 
     #[test]
