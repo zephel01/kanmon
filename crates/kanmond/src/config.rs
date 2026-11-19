@@ -47,6 +47,41 @@ pub struct Config {
     pub volume: VolumeCfg,
     /// 居座り（開発ツールの設定・自動起動への仕込み）の走査
     pub persistence: PersistCfg,
+    /// プロセスごとの「いつもの形」との違い
+    pub profile: ProfileCfg,
+}
+
+/// プロセスごとの「いつもの形」（宛先・時間帯・親子・送信量）。形が安定しているプロセスで違いが出たときだけ点数を付ける
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProfileCfg {
+    pub enabled: bool,
+    /// 観測を始めてからこの日数たったプロセスだけを「安定」と見る
+    pub min_age_days: u32,
+    /// 最後に新しい宛先が増えてからこの日数たっていれば「安定」
+    pub quiet_days: u32,
+    /// 知っている宛先がこれより多いプロセス（ブラウザ等）は対象外
+    pub max_dests: u32,
+    /// 親が起動する子の種類がこれより多い親（シェル・ランチャー等）は対象外
+    pub max_children: u32,
+    /// 時間帯は、観測がこの日数以上のプロセスだけで見る
+    pub hour_min_age_days: u32,
+    /// 送信量は、この MB 以上のときだけ見る
+    pub volume_min_mb: u64,
+}
+
+impl Default for ProfileCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_age_days: 3,
+            quiet_days: 2,
+            max_dests: 30,
+            max_children: 10,
+            hour_min_age_days: 7,
+            volume_min_mb: 10,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -363,6 +398,7 @@ impl Default for Config {
             volume: VolumeCfg::default(),
             log: LogCfg::default(),
             persistence: PersistCfg::default(),
+            profile: ProfileCfg::default(),
         }
     }
 }

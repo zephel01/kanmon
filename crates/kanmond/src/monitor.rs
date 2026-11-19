@@ -84,6 +84,8 @@ pub struct Monitor {
     persist_recent: Vec<kanmon_core::persist::Recent>,
     /// 見張る site-packages と、その更新時刻（.pth の追加に早く気づくため）
     persist_sites: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+    /// 「いつもの形」に記録済みの項目（DB に何度も書かないため）
+    profile_seen: HashSet<String>,
     last_site_check: Instant,
     pub print: bool,
 }
@@ -250,6 +252,7 @@ impl Monitor {
             persist_recent,
             persist_sites: vec![],
             last_site_check: Instant::now(),
+            profile_seen: HashSet::new(),
             print: false,
             cfg,
         })
@@ -568,6 +571,9 @@ impl Monitor {
                     let port = s.remote.map(|r| r.port()).unwrap_or(0).to_string();
                     let first_port = self.store.baseline_touch(&proc_key, &port, "port", now_s)?;
                     e.kanmon.dest_first_for_process = first_dest && !learning && !initial;
+                    if self.cfg.profile.enabled && proc_key != "unknown" {
+                        self.profile_connect(&mut e, &proc_key, now_s, learning || initial)?;
+                    }
                     e.kanmon.persist_recent = kanmon_core::persist::recent_kinds(
                         &self.persist_recent,
                         now_s,
@@ -664,6 +670,21 @@ impl Monitor {
             proc_key = k;
         } else {
             e.process.pid = Some(d.pid);
+        }
+        // 「いつもの形」：送信量。観測が長いプロセスで、これまでの最大の何倍か
+        if self.cfg.profile.enabled && !proc_key.starts_with("pid:") {
+            let prev = self.store.volume_profile(&proc_key)?;
+            self.store.volume_record(&proc_key, d.bytes, now_s)?;
+            let pc = &self.cfg.profile;
+            let age = e.process.first_seen_age_s.unwrap_or(0);
+            if !learning && age >= pc.min_age_days as i64 * 86_400 && d.bytes >= pc.volume_min_mb << 20 {
+                let floor = self.cfg.volume.min_report_kb * 1024;
+                e.kanmon.profile = Some(ev::ProfileFacts {
+                    volume_ratio: Some(kanmon_core::profile::volume_ratio(d.bytes, prev.map(|p| p.0), floor)),
+                    volume_max: prev.map(|p| p.0),
+                    ..Default::default()
+                });
+            }
         }
         let files = crate::volume::open_files(d.pid);
         let sum = kanmon_core::volume::summarize_open(&files);
@@ -809,6 +830,89 @@ impl Monitor {
                 Obs::Dns { server, client, client_port, msg } => self.on_dns(server, client, client_port, &msg, now),
             }
         }
+    }
+
+    /// ベースラインに記録し、初出なら true（「いつもの形」用。同じ項目はメモリで覚えて DB に何度も書かない）
+    fn profile_touch(&mut self, proc_key: &str, item: &str, kind: &str, now: i64) -> Result<bool> {
+        let k = format!("{kind}\u{1}{proc_key}\u{1}{item}");
+        if self.profile_seen.contains(&k) {
+            return Ok(false);
+        }
+        let first = self.store.baseline_touch(proc_key, item, kind, now)?;
+        if self.profile_seen.len() > 500_000 {
+            self.profile_seen.clear();
+        }
+        self.profile_seen.insert(k);
+        Ok(first)
+    }
+
+    /// 接続のイベントに「いつもの形」との違いを付ける。`suppress`（学習期間・起動時の既存の接続）は記録だけ
+    fn profile_connect(&mut self, e: &mut Event, proc_key: &str, now: i64, suppress: bool) -> Result<()> {
+        use chrono::Timelike;
+        use kanmon_core::profile;
+        const DAY: i64 = 86_400;
+        let pc = self.cfg.profile.clone();
+        let age = e.process.first_seen_age_s.unwrap_or(0);
+        let mut f = ev::ProfileFacts::default();
+        let mut touched = false;
+
+        // 宛先（名前が分かるインターネットの宛先だけ。CDN の IP は変わるので、IP では見ない）
+        let dom = e.destination.as_ref().and_then(|d| d.domain.clone());
+        if let Some(d) = dom.filter(|_| e.network.scope.as_deref() == Some("internet")) {
+            let item = kanmon_core::dga::registered_domain(&d).unwrap_or(d);
+            let st = self.store.baseline_stats(proc_key, "pdest")?;
+            let first = self.profile_touch(proc_key, &item, "pdest", now)?;
+            f.stable = profile::stable(
+                age,
+                &st,
+                now,
+                pc.min_age_days as i64 * DAY,
+                pc.quiet_days as i64 * DAY,
+                pc.max_dests as i64,
+            );
+            f.known_dests = Some(st.known);
+            f.quiet_days = st.newest.map(|n| profile::days(now - n));
+            f.new_dest = first && f.stable && !suppress;
+            touched = true;
+        }
+
+        // 時間帯（観測が長いプロセスで、初めての時間帯）
+        let hour = Local::now().hour();
+        let st = self.store.baseline_stats(proc_key, "hour")?;
+        let first = self.profile_touch(proc_key, &hour.to_string(), "hour", now)?;
+        if first && !suppress && st.known > 0 && age >= pc.hour_min_age_days as i64 * DAY {
+            f.new_hour = true;
+            f.hour = Some(hour);
+            touched = true;
+        }
+
+        // 親 → 子（子の種類が安定している親が、初めての子を起動し、その子が通信した）
+        let parent = e.process.parent.as_ref().and_then(|p| p.name.clone());
+        let child = e.process.name.clone();
+        if let (Some(parent), Some(child)) = (parent, child) {
+            let key = format!("parent:{parent}");
+            let st = self.store.baseline_stats(&key, "child")?;
+            let first = self.profile_touch(&key, &child, "child", now)?;
+            let page = st.oldest.map(|o| now - o).unwrap_or(0);
+            let stable = profile::stable(
+                page,
+                &st,
+                now,
+                pc.min_age_days as i64 * DAY,
+                pc.quiet_days as i64 * DAY,
+                pc.max_children as i64,
+            );
+            if first && stable && !suppress {
+                f.new_child = true;
+                f.parent = Some(parent);
+                touched = true;
+            }
+        }
+
+        if touched {
+            e.kanmon.profile = Some(f);
+        }
+        Ok(())
     }
 
     fn on_dns(

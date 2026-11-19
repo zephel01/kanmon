@@ -84,6 +84,17 @@ NTFY=$!
 
 gcc -O2 -o "$W/netclient" "$ROOT/tests/harness/netclient.c"
 
+# [Q] 用：親 kanmon-parent の「子の種類」が 10 日前から安定している状態を先に作る
+mkdir -p "$W/data"
+python3 - "$W/data/kanmon.db" <<'PY'
+import sqlite3, sys, time
+t = int(time.time()) - 10 * 86400
+db = sqlite3.connect(sys.argv[1])
+db.execute("CREATE TABLE IF NOT EXISTS baselines (proc_key TEXT, item TEXT, kind TEXT, first_seen INTEGER, last_seen INTEGER, count INTEGER, PRIMARY KEY (proc_key, item, kind))")
+db.execute("INSERT OR REPLACE INTO baselines VALUES ('parent:kanmon-parent', 'sleep', 'child', ?, ?, 1)", (t, t))
+db.commit()
+PY
+
 "$KANMOND" --config "$W/etc/kanmon.toml" 2> "$W/kanmond.log" &
 D=$!
 cleanup() { kill $D $NTFY 2>/dev/null || true; }
@@ -222,6 +233,12 @@ echo "[E] 疑似ビーコン：1 秒周期 × 10 回（S7）"
 sleep 12  # ビーコン集計を待つ
 
 echo "[F] 状態ソケット（メニューバーアプリ用）"
+echo "[Q] 安定した親が初めての子（curl）を起動して通信（A2 A2b）"
+cp /bin/bash "$W/kanmon-parent"
+cp "$W/netclient" "$W/curl"
+# 末尾の true で bash が exec に置き換わるのを防ぎ、親子関係を残す
+"$W/kanmon-parent" -c '"$1" 203.0.113.79 443 1 0 1500; true' _ "$W/curl"
+
 python3 - "$W/kanmond.sock" > "$W/status.json" <<'PY'
 import socket, sys
 s = socket.socket(socket.AF_UNIX); s.connect(sys.argv[1])
@@ -289,6 +306,9 @@ g = find(lambda e: e["network"]["kind"] == "listen" and e.get("source",{}).get("
 check("G: 0.0.0.0:8888 の待受に D3", g and "D3" in sig(g[0]))
 hh = find(lambda e: e["network"]["kind"] == "connect" and "npm" in e["process"].get("parent_chain", []))
 check("H: npm 配下の python に D4", hh and "D4" in sig(hh[0]))
+l = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "203.0.113.79")
+check("Q: 安定した親の初めての子に A2 A2b", l and {"A2", "A2b"} <= set(sig(l[0]))
+      and l[0]["kanmon"].get("profile", {}).get("new_child") is True and l[0]["kanmon"]["profile"].get("parent") == "kanmon-parent")
 st2 = json.load(open(sys.argv[1].replace("events.jsonl", "status-restart.json")))
 check("I: 再起動後も直近の警告が残る", any(a["level"] == "critical" for a in st2.get("alerts", [])))
 j = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "203.0.113.60")

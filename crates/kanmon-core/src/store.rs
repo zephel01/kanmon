@@ -65,6 +65,9 @@ impl Store {
               proc_key TEXT, dest_key TEXT, ts REAL, bytes INTEGER
             );
             CREATE INDEX IF NOT EXISTS conn_starts_ts ON conn_starts(ts);
+            CREATE TABLE IF NOT EXISTS profile_volume (
+              proc_key TEXT PRIMARY KEY, max_out INTEGER, reports INTEGER, first_seen INTEGER, last_seen INTEGER
+            );
             "#,
         )?;
         Ok(Self { conn })
@@ -104,6 +107,36 @@ impl Store {
             )?;
         }
         Ok(n == 1)
+    }
+
+    /// ある種類のベースラインの集計（知っている数、一番古い・新しい first_seen）
+    pub fn baseline_stats(&self, proc_key: &str, kind: &str) -> Result<crate::profile::Stats> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*), MIN(first_seen), MAX(first_seen) FROM baselines WHERE proc_key=?1 AND kind=?2",
+            params![proc_key, kind],
+            |r| Ok(crate::profile::Stats { known: r.get(0)?, oldest: r.get(1)?, newest: r.get(2)? }),
+        )?)
+    }
+
+    /// 送信量のこれまで（最大、報告の回数）
+    pub fn volume_profile(&self, proc_key: &str) -> Result<Option<(u64, i64)>> {
+        Ok(self
+            .conn
+            .query_row("SELECT max_out, reports FROM profile_volume WHERE proc_key=?1", [proc_key], |r| {
+                Ok((r.get::<_, i64>(0)? as u64, r.get(1)?))
+            })
+            .optional()?)
+    }
+
+    /// 送信量を記録する（最大を更新）
+    pub fn volume_record(&self, proc_key: &str, out: u64, now: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO profile_volume(proc_key,max_out,reports,first_seen,last_seen) VALUES(?1,?2,1,?3,?3)
+             ON CONFLICT(proc_key) DO UPDATE SET max_out=MAX(max_out, excluded.max_out), reports=reports+1,
+             last_seen=excluded.last_seen",
+            params![proc_key, out as i64, now],
+        )?;
+        Ok(())
     }
 
     pub fn conn_start(&self, proc_key: &str, dest_key: &str, ts: f64, bytes: Option<i64>) -> Result<()> {
@@ -232,6 +265,22 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_stats_and_volume() {
+        let s = Store::open_in_memory().unwrap();
+        assert_eq!(s.baseline_stats("p", "pdest").unwrap(), crate::profile::Stats::default());
+        s.baseline_touch("p", "a.com", "pdest", 100).unwrap();
+        s.baseline_touch("p", "b.com", "pdest", 300).unwrap();
+        s.baseline_touch("p", "a.com", "pdest", 500).unwrap();
+        s.baseline_touch("p", "x", "hour", 900).unwrap();
+        let st = s.baseline_stats("p", "pdest").unwrap();
+        assert_eq!((st.known, st.oldest, st.newest), (2, Some(100), Some(300)));
+        assert_eq!(s.volume_profile("p").unwrap(), None);
+        s.volume_record("p", 5_000_000, 10).unwrap();
+        s.volume_record("p", 2_000_000, 20).unwrap();
+        assert_eq!(s.volume_profile("p").unwrap(), Some((5_000_000, 2)));
+    }
 
     #[test]
     fn baseline_and_series() {
