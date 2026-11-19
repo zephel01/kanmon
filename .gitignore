@@ -12,3 +12,4 @@ _OUTPUTS/
 # macOS アプリのビルド成果物
 macos/build/
 macos/KanmonBar/.build/
+/dist/

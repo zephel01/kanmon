@@ -1,0 +1,6 @@
+#!/bin/sh
+# rpm：$1 が 0 なら削除（1 以上は更新）
+if [ "$1" = "0" ] && [ -d /run/systemd/system ]; then
+  systemctl disable --now kanmond >/dev/null 2>&1 || true
+fi
+exit 0

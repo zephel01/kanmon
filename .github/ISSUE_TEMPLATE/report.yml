@@ -1,0 +1,50 @@
+name: 動作報告
+description: 動作の報告（Linux のパッケージ・macOS 等）、誤検知、出てほしいのに出なかったもの
+title: "[report] "
+labels: ["report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        報告ありがとうございます。貼る前に、ユーザー名・ホスト名・社内のドメイン・IP などが入っていないか確かめてください。
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 報告の種類
+      options:
+        - 動作した（環境の報告）
+        - 導入でつまずいた
+        - 誤検知（出なくてよい通知が出た）
+        - 見逃し（出てほしい通知が出なかった）
+        - その他
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: kanmon の版と入れ方
+      placeholder: 0.4.0（.deb）／ 0.4.0（install-linux.sh）
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS と版（アーキテクチャ）
+      placeholder: Ubuntu 24.04（x86_64）／ macOS 15（Apple Silicon）
+    validations:
+      required: true
+  - type: textarea
+    id: check
+    attributes:
+      label: 状態
+      description: "`kanmonctl status` の出力。Linux は `systemctl status kanmond` も"
+      render: text
+  - type: textarea
+    id: alerts
+    attributes:
+      label: 通知・警告（誤検知・見逃しのとき）
+      description: "`kanmonctl alerts` の該当行（ルール ID・レベル・点数）と、そのとき何をしていたか"
+  - type: textarea
+    id: notes
+    attributes:
+      label: そのほか（導入でつまずいた点、こうなってほしい点）

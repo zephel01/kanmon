@@ -5,7 +5,7 @@
 **新しい手口に自分で追いつける、macOS / Linux 向けのプロセス単位の通信監視ツール**
 
 [![CI](https://github.com/zephel01/kanmon/actions/workflows/ci.yml/badge.svg)](https://github.com/zephel01/kanmon/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue)](CHANGELOG.md)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)
 ![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)
@@ -59,6 +59,15 @@ git clone https://github.com/zephel01/kanmon.git && cd kanmon
 cargo build --release
 sudo packaging/install-linux.sh
 ```
+
+**Linux のパッケージ（.deb・.rpm）**
+[リリース](https://github.com/zephel01/kanmon/releases)から取って入れます。自動では起動しないので、設定を見てから有効にします。
+```bash
+sudo apt install ./kanmon_0.4.0-1_amd64.deb        # Debian 12・Ubuntu 22.04 以降
+sudo dnf install ./kanmon-0.4.0-1.x86_64.rpm       # Fedora・RHEL 9 系
+sudo systemctl enable --now kanmond
+```
+`/usr/sbin/kanmond`・`/usr/bin/kanmonctl`・設定とルールは `/etc/kanmon`（書き換えた設定は更新で上書きしない）。
 
 **メニューバーアプリ（macOS 13 以降）**
 ```bash
