@@ -18,7 +18,7 @@ jobs:
           components: clippy, rustfmt
       - name: libpcap（DNS・SNI の観測に使う）
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y libpcap-dev
       - name: 導入スクリプト（launchd の入れ替え）の確認
         if: runner.os == 'Linux'
         run: |
@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y libpcap-dev
       - run: cargo build --release -p kanmond -p kanmonctl
       - uses: taiki-e/install-action@v2
         with:
