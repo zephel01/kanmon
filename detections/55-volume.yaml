@@ -10,7 +10,9 @@ lists:
     # V4 で「.bundle で終わる」を別に見る
     ["/.git/objects/", "/.env", ".env.local", "/.ssh/", "/.aws/", "/.config/gcloud/", "/.kube/",
      "/.docker/config.json", "/.npmrc", "/.pypirc", "/.netrc", "/.gnupg/", "id_rsa", "id_ed25519",
-     "/Library/Keychains/", "/Cookies", "/Login Data", "/.git-credentials"]
+     "/Library/Keychains/", "/.git-credentials"]
+  # ブラウザ・ブラウザを埋め込んだアプリのログイン情報（v0.5.5 で sensitive_paths から分けた）
+  profile_secret_paths: ["/Cookies", "/Login Data"]
   # モデル・データの拡張子
   model_exts: [gguf, safetensors, onnx, ckpt, pt, bin, h5, tflite, mlmodel, mlpackage, npz, parquet, arrow]
   # 大きいファイルの正当な置き場（登録ドメイン）。自分の置き場はここに足す
@@ -53,6 +55,10 @@ detections:
         - any:
             - { field: kanmon.bytes.open_paths, op: contains, value: "@sensitive_paths" }
             - { field: kanmon.bytes.open_paths, op: regex, value: '(?i)\.bundle$' }
+            # Cookies 等は、アプリが自分のものを開いているだけなら当てない（Electron のアプリ。v0.5.5）
+            - all:
+                - { field: kanmon.bytes.open_paths, op: contains, value: "@profile_secret_paths" }
+                - not: { field: kanmon.bytes.own_profile_only, op: eq, value: true }
         - { field: kanmon.bytes.out, op: gte, value: 1048576 }
         # ブラウザが自分の Cookies を開いたまま送るのは普通（実機で Chrome が 1 日 20 件以上）。
         # ブラウザ以外が Cookies を開いて送るのは情報窃取の形なので、引き続き当てる

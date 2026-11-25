@@ -217,6 +217,8 @@ pub fn private_answers(qname: &str, ips: &[IpAddr], extra_ok_suffixes: &[String]
         || LOCAL_SUFFIXES.iter().any(|s| ends_with_label(&q, s))
         || extra_ok_suffixes.iter().any(|s| ends_with_label(&q, s))
         || crate::dga::registered_domain(&q).is_none()
+        // 公開サフィックスに無い名前（WARP の `.warp-svc` 等）は「公開ドメイン」ではない（v0.5.5）
+        || !crate::dga::is_public_name(&q)
     {
         return vec![];
     }
@@ -224,6 +226,15 @@ pub fn private_answers(qname: &str, ips: &[IpAddr], extra_ok_suffixes: &[String]
 }
 
 // ---------------- N5 応答の競合 ----------------
+
+/// 食い違った 2 つの答えが、どれも相手側に同じ AS を持つか（CDN の答えの揺れ）。
+/// AS が分からない IP が 1 つでもあれば偽（安全側。N5 のまま）。偽の応答は別の AS を指すので区別できる
+pub fn same_as_answers(a: &[Option<u32>], b: &[Option<u32>]) -> bool {
+    if a.is_empty() || b.is_empty() || a.iter().chain(b).any(|x| x.is_none()) {
+        return false;
+    }
+    a.iter().all(|x| b.contains(x)) && b.iter().all(|x| a.contains(x))
+}
 
 type ConflictKey = (IpAddr, IpAddr, u16, u16, String);
 
@@ -361,6 +372,15 @@ mod tests {
         assert_eq!(private_answers("api.example.com", &[ip("127.0.0.1")], &ok), vec![ip("127.0.0.1")]);
         assert_eq!(private_answers("api.example.com", &[ip("10.0.0.5"), ip("203.0.113.1")], &ok), vec![ip("10.0.0.5")]);
         assert!(private_answers("ads.example.com", &[ip("0.0.0.0")], &ok).is_empty());
+        // N5：同じ AS の中での揺れは偽の割り込みではない
+        assert!(same_as_answers(&[Some(20940), Some(20940)], &[Some(20940)]));
+        assert!(!same_as_answers(&[Some(20940)], &[Some(64500)]));
+        assert!(!same_as_answers(&[Some(20940), Some(64500)], &[Some(20940)]));
+        assert!(!same_as_answers(&[Some(20940)], &[None]));
+        assert!(!same_as_answers(&[], &[Some(1)]));
+        // 公開サフィックスに無い名前は対象外（v0.5.5）
+        assert!(private_answers("connectivity-check.warp-svc", &[ip("127.0.0.1")], &ok).is_empty());
+        assert!(!private_answers("rebind.example.com", &[ip("127.0.0.1")], &ok).is_empty());
         // DoH でも同じローカルの IP なら、持ち主が公開している記録
         assert!(private_published(&[ip("127.0.0.1")], &[ip("127.0.0.1")]));
         assert!(private_published(&[ip("192.168.18.7")], &[ip("192.168.18.7"), ip("10.0.0.1")]));

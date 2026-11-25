@@ -56,7 +56,7 @@ detections:
 |---|---|
 | `network.kind` / `direction` / `transport` / `scope` | 種別（connect / accept / listen / raw_socket / beacon_report / dns_integrity / bytes_report / persistence / inspect）、方向、tcp / udp / raw / packet / dns、loopback / lan / internet / all |
 | `process.executable` / `name` / `args` / `user` / `uid` | 実行ファイル、引数、ユーザー |
-| `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / adhoc / unsigned / package / unmanaged / unknown |
+| `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / resources_modified（検証に失敗したが、変わったのはアプリの中のコード以外のファイルだけ。v0.5.5）/ adhoc / unsigned / package / unmanaged / unknown |
 | `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
 | `process.hash.sha256` / `proc_key` | ハッシュ、安定識別キー |
 | `process.parent.name` / `parent_chain` | 親プロセス、親から上へ最大 6 段の実行ファイル名。インタプリタはスクリプト名も入る（`node …/npm-cli.js` → `node`・`npm-cli.js`、`python -m pip` → `pip`） |
@@ -66,8 +66,8 @@ detections:
 | `destination.domain_source` | 名前の出どころ：`sni`（その接続の TLS ClientHello）/ `dns`（DNS 応答で引かれた名前）/ `sni_ip`（同じ IP への別の接続の SNI） |
 | `dns.question.name` / `dns.resolved_ip` | DNS の問い合わせ名と答え（`dns_integrity` のみ） |
 | `file.path` | 対象のファイル（hosts の書き換え） |
-| `kanmon.dns.finding` | DNS の改ざん検知の種類：`hosts_changed` / `resolver_changed` / `crosscheck_mismatch` / `private_answer` / `private_answer_published`（DoH でも同じローカルの IP。持ち主が公開した記録で、同梱ルールは点を付けない）/ `conflicting_answer` / `unexpected_resolver` |
-| `kanmon.dns.watched` / `redirected` / `unknown_public` | 監視リストのドメインが関わる / hosts で他所へ向けられている / 見慣れない公開 DNS |
+| `kanmon.dns.finding` | DNS の改ざん検知の種類：`hosts_changed` / `resolver_changed` / `crosscheck_mismatch` / `private_answer` / `private_answer_published`（DoH でも同じローカルの IP。持ち主が公開した記録で、同梱ルールは点を付けない）/ `conflicting_answer` / `conflicting_answer_same_as`（食い違った答えがどれも同じ AS。CDN の揺れで、同梱ルールは点を付けない）/ `unexpected_resolver` |
+| `kanmon.dns.watched` / `redirected` / `unknown_public` / `unknown_public_isp` | 監視リストのドメインが関わる / hosts で他所へ向けられている / 見慣れない公開 DNS / その DNS がどれも住宅用回線（回線事業者）の AS にある |
 | `kanmon.dns.added` / `removed` / `added_scope` / `server` / `other` / `tls` | 追加・削除された行や DNS サーバー、追加先の範囲、応答した DNS サーバー、比較相手の答え（N4 では DoH の答え）、答えの IP ごとの証明書の確認結果（N3） |
 | `kanmon.dns.ttl` | 応答の TTL（秒、N4）。リバインディングは短い TTL で答えを切り替える |
 | `kanmon.ti_match` / `ti_source` | 脅威インテルに一致したか、どのリストか |
@@ -90,12 +90,14 @@ detections:
 | `kanmon.persist.module` | `.pth` が最初に読み込むモジュールのトップレベル名（`persistence` の pth_exec のみ） |
 | `kanmon.persist_recent` | 直近（既定 24 時間）に、起動のたびに動く仕掛けが追加・変更された種類（pth_exec・claude_hook・vscode_folderopen・git_hook・rc_pipe・autostart）。通信のイベント（`connect`）に付く |
 | `kanmon.bytes.open_paths` / `open_exts` / `open_size` / `out_per_open` | 報告の瞬間に開いていた通常ファイルのパス・拡張子・合計容量、送信量 ÷ 合計容量 |
+| `kanmon.bytes.own_profile_only` | 開いているログイン情報のファイル（Cookies・Login Data）が、どれもアプリ自身のデータフォルダ（`Application Support/<アプリ名>/`）の下（Electron 等のアプリ。v0.5.5） |
 
 ## 同梱ルール
 | ID | 内容 | 点 |
 |---|---|---|
 | S1 | 脅威インテル（既知の悪性 IP・ドメイン）に一致 | +100 |
 | S2 / S2b | 未署名・ad-hoc・パッケージ管理外 / 署名の検証に失敗 | +20 / +40 |
+| S2r | 署名の検証に失敗したが、変わったのはコード以外のファイル（言語ごとの文字列・画像等）だけ | +10 |
 | S3 | 実行ファイルが 24 時間以内に作成・更新された | +15 |
 | S4 | 一時フォルダ・ダウンロード等から実行 | +25 |
 | S5 | 削除済み・memfd・隠しファイル | +35 |
@@ -103,7 +105,7 @@ detections:
 | S7 / S7m / S7x | ビーコン（強・中）、信頼できない実行ファイルの周期通信。インターネットの宛先で間隔 1 秒以上のもの | +20 / +10 / +20 |
 | S9 | 自動生成（DGA）らしいドメイン | +15 |
 | S11 / S12 | 非標準ポートを初めて使う / 初めての宛先 | +10 / +10 |
-| S14 | ブラウザ以外が DNS を迂回（DoH / DoT） | +15 |
+| S14 | ブラウザ・OS の DNS（`system_resolvers`：mDNSResponder・systemd-resolved 等）以外が DNS を迂回（DoH / DoT） | +15 |
 | S15 / S16 / S17 | 新しい待受を外部に公開 / インターネットから着信 / raw ソケット | +25 / +30 / +20 |
 | S18 | トンネル・動的 DNS 系ドメイン | +10 |
 | T-trusted | Apple 署名・公式パッケージ（curl・bash・ssh 等は除く） | −15 |
@@ -113,8 +115,8 @@ detections:
 | A3 | いつもの形：いつもの送信量の 10 倍以上（10MB 以上のとき。ブラウザは除く） | +25 |
 | A4 | いつもの形：観測 7 日以上のプロセスが、使ったことのない時間帯に通信 | +10 |
 | A5 | いつもの形：いつも同じ AS にしかつながないプロセスが、初めての AS へ（ブラウザは除く） | +10 |
-| R1 | ブラウザ・P2P 以外が、住宅用回線の IP へ直接つないだ（`22-asn.yaml`） | +25 |
-| R2 | 名前の観測が動いているのに、ブラウザ・P2P 以外が名前を引かずにインターネットの IP へ直結（DNS・NTP・起動時の既存の接続は除く） | +10 |
+| R1 | ブラウザ・P2P 以外が、住宅用回線の IP へ直接つないだ（`22-asn.yaml`。NTP は除く） | +25 |
+| R2 | 名前の観測が動いているのに、ブラウザ・P2P 以外が名前を引かずにインターネットの IP へ直結（DNS・NTP・起動時の既存の接続、OS 付属のプロセス、宛先が CDN・クラウドの接続は除く） | +10 |
 
 ### 開発者を狙う手口（`40-developer.yaml`）
 | ID | 内容 | 点 |
@@ -142,7 +144,7 @@ detections:
 | N2 / N2p | DNS サーバーの設定が変わった（Wi-Fi の切り替えでも起きる）/ 見慣れない公開 DNS が設定された | +10 / +50 |
 | N3 | 監視リストのドメインの答えが DoH で引き直した答えと食い違い、しかも答えの IP がそのドメインの正しい TLS 証明書を出さない | +70 |
 | N4 / N4w | 公開ドメインがループバック・社内の IP に解決された / それが監視リストのドメイン。DoH でも同じ答えなら持ち主が公開した記録として `private_answer_published`（点なし）にする | +30 / +30 |
-| N5 / N5w | 同じ問い合わせに中身の違う応答が届いた / それが監視リストのドメイン | +40 / +30 |
+| N5 / N5w | 同じ問い合わせに中身の違う応答が届いた / それが監視リストのドメイン。食い違った答えがどれも同じ AS なら `conflicting_answer_same_as`（点なし） | +40 / +30 |
 | N6 / N6u | 設定にない DNS サーバーから応答 / それがよく使われる公開 DNS でもない（記録のみ） | +10 / +10 |
 
 ### 送信量（`55-volume.yaml`）
@@ -153,7 +155,7 @@ detections:
 | V1 | 10 分で 100MB 以上を 1 つの宛先へ | +20 |
 | V2 | AI コーディング CLI が 50MB 以上 | +40 |
 | V3 | パッケージ導入処理の配下から 1MB 以上 | +50 |
-| V4 | 秘密情報・リポジトリの中身（`.env`・`~/.ssh`・`.git/objects` 等）を開いたまま 1MB 以上 | +50 |
+| V4 | 秘密情報・リポジトリの中身（`.env`・`~/.ssh`・`.git/objects` 等）を開いたまま 1MB 以上。Cookies・Login Data は、アプリが自分のものを開いているだけなら当てない | +50 |
 | V5 | 開いているファイルの合計の 3 倍以上を送った（100MB 以上） | +15 |
 | V6 | 名前の分からない宛先へ、署名の無いプロセスが 100MB 以上 | +15 |
 | V9 | モデル・データ（GGUF・safetensors 等）を登録済みの置き場（Hugging Face 等）へ上げている | −40 |

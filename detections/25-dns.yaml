@@ -46,6 +46,8 @@ detections:
       all:
         - { field: kanmon.dns.finding, op: eq, value: resolver_changed }
         - { field: kanmon.dns.unknown_public, op: eq, value: true }
+        # 回線事業者の DNS（WARP・VPN を切ったときに DHCP で入る）は除く（v0.5.5）
+        - not: { field: kanmon.dns.unknown_public_isp, op: eq, value: true }
 
   - id: N3
     name: crosscheck_mismatch

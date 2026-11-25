@@ -27,6 +27,12 @@ pub fn registered_domain(host: &str) -> Option<String> {
     psl::domain_str(&h).map(|s| s.to_string())
 }
 
+/// 公開サフィックスの一覧に載っている名前か（`.warp-svc`・`.internal` のような私的な名前は偽）
+pub fn is_public_name(host: &str) -> bool {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    psl::suffix(h.as_bytes()).is_some_and(|s| s.is_known())
+}
+
 /// 登録ドメインから公開サフィックスを除いたラベル（例：`example.co.jp` → `example`）
 fn label_of(host: &str) -> Option<String> {
     let h = host.trim_end_matches('.').to_ascii_lowercase();
@@ -76,7 +82,7 @@ pub struct DgaFeatures {
 
 /// UUID の形（8-4-4-4-12 の 16 進）。クラウドの実行環境・CDN が名前に使う。DGA は登録できるドメインを
 /// 作るもので、この形にはならない
-fn is_uuid(label: &str) -> bool {
+pub fn is_uuid(label: &str) -> bool {
     let parts: Vec<&str> = label.split('-').collect();
     parts.len() == 5
         && parts.iter().zip([8, 4, 4, 4, 12]).all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_hexdigit()))

@@ -31,6 +31,18 @@ pub fn volume_ratio(out: u64, prev_max: Option<u64>, floor: u64) -> f64 {
 }
 
 /// 何日たったか（小数 1 桁）
+/// 「いつもの形」で覚える宛先。登録ドメインで覚えるが、名前の一番左が UUID なら外す。
+/// `claudeusercontent.com` のように公開サフィックスに載ったサービスでは、
+/// `<UUID>.frame.claudeusercontent.com` が毎回別の登録ドメインになるため（v0.5.5）
+pub fn dest_item(domain: &str) -> String {
+    let d = domain.trim_end_matches('.').to_ascii_lowercase();
+    let d = match d.split_once('.') {
+        Some((first, rest)) if crate::dga::is_uuid(first) && rest.contains('.') => rest.to_string(),
+        _ => d,
+    };
+    crate::dga::registered_domain(&d).unwrap_or(d)
+}
+
 pub fn days(s: i64) -> f64 {
     ((s.max(0) as f64 / 86_400.0) * 10.0).round() / 10.0
 }
@@ -65,5 +77,15 @@ mod tests {
         assert_eq!(volume_ratio(20 << 20, None, 1 << 20), 20.0);
         assert_eq!(volume_ratio(1, Some(0), 0), 1.0);
         assert_eq!(days(36 * 3600), 1.5);
+    }
+
+    #[test]
+    fn dest_item_uuid() {
+        assert_eq!(
+            dest_item("7955c689-8843-4c88-b6a5-9a16fd3173d7.frame.claudeusercontent.com"),
+            "frame.claudeusercontent.com"
+        );
+        assert_eq!(dest_item("api.github.com"), "github.com");
+        assert_eq!(dest_item("Foo.Example.co.jp."), "example.co.jp");
     }
 }

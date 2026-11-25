@@ -137,7 +137,7 @@ detections:
         - { field: process.parent_chain, op: in, value: [npm, pip, pip3, uv, cargo] }
         - { field: process.name, op: in, value: [sh, bash, curl, wget] }
 ```
-同梱ルールは 108 件です。一般的な手口（S1〜S18）、開発者を狙う手口（D1〜D12：遠隔操作ソフト、トンネル、開発サーバーの公開、パッケージ導入時の通信、持ち出し先のサービス、AI CLI の非公式な宛先、ブロックチェーンの RPC など）、DNS の改ざん（N1〜N6：hosts の書き換え、DNS サーバーの変更、DoH での照合など）、送信量（V1〜V9）、居座り（P1〜P7・PW）、仕込みと送信の結び付け（C1・C2）、いつもの形との違い（A1〜A5）、宛先の回線の種類（R1・R2）、パッケージの更新の検査（I1〜I25・IC1〜IC6）を含みます。書き方と、ルールから参照できるフィールドは [docs/detections.md](docs/detections.md) にあります。
+同梱ルールは 109 件です。一般的な手口（S1〜S18）、開発者を狙う手口（D1〜D12：遠隔操作ソフト、トンネル、開発サーバーの公開、パッケージ導入時の通信、持ち出し先のサービス、AI CLI の非公式な宛先、ブロックチェーンの RPC など）、DNS の改ざん（N1〜N6：hosts の書き換え、DNS サーバーの変更、DoH での照合など）、送信量（V1〜V9）、居座り（P1〜P7・PW）、仕込みと送信の結び付け（C1・C2）、いつもの形との違い（A1〜A5）、宛先の回線の種類（R1・R2）、パッケージの更新の検査（I1〜I25・IC1〜IC6）を含みます。書き方と、ルールから参照できるフィールドは [docs/detections.md](docs/detections.md) にあります。
 
 ## Python の起動の仕掛け（.pth）を確かめる
 2026 年 11 月の agent-framework（PyPI）のように、`.pth` に 1 行足すだけで Python の起動のたびにコードが動きます。手元の `.pth` は次で一覧にできます（読むだけ）。

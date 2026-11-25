@@ -1,6 +1,10 @@
 # 宛先側のシグナル（設計書 §9.1）
 # ※ 第1弾はポーリング収集のため destination.domain は空（DNS 紐付けは第5弾）。
 #   ドメインを使うルール（S9・S18）は replay や将来のDNS強化で効く。
+lists:
+  # OS の DNS の仕組み（名前解決を代わりに行うプロセス）
+  system_resolvers: [mDNSResponder, systemd-resolved, dnsmasq, unbound, "dnscrypt-proxy", stubby]
+
 detections:
   - id: S1
     name: threat_intel_match
@@ -50,6 +54,8 @@ detections:
             any:
               - { field: process.name, op: in, value: "@browsers", ci: true }
               - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
+              # OS の DNS そのもの（DoH・DoT を設定するとこれが使う。実機で 1 週間に約 1,000 件。v0.5.5）
+              - { field: process.name, op: in, value: "@system_resolvers" }
         - any:
             - { field: destination.port, op: eq, value: 853 }
             - all:
