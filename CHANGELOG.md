@@ -6,6 +6,20 @@
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-25
+Mac の実機の 1 週間分のログの精査（notice 以上 305 件）で見つかった誤検知を直した。
+
+### 修正
+- S16（インターネットから着信）：外へつなぐ接続を「着信」と誤判定していた。手元のポートの番号が、別のプロセスがループバックだけで待ち受けているポートと同じだと着信と見なしていた。待受の IP も一致するときだけ着信にする
+- N5（同じ問い合わせに違う応答）：食い違った答えがどれも同じ AS なら、CDN の答えの揺れとして `conflicting_answer_same_as`（点なし）にする
+- N2p（見慣れない DNS サーバー）：その DNS がどれも住宅用回線（回線事業者）の AS なら付けない（WARP・VPN を切ったときに DHCP で入る）。`kanmon.dns.unknown_public_isp`
+- N4：公開サフィックスに無い名前（`.warp-svc` 等）は対象外
+- V4：Cookies・Login Data は、Electron 等のアプリが自分のデータフォルダのものを開いているだけなら当てない（`kanmon.bytes.own_profile_only`）。他のアプリの Cookies を開いて送る形は当てる。一覧は `sensitive_paths` と `profile_secret_paths` に分けた
+- A1（いつもの形の宛先）：名前の一番左が UUID なら外して覚える（`<UUID>.frame.claudeusercontent.com` が毎回別の宛先になっていた）
+- R1：NTP（123 番）を除く。R2：OS 付属のプロセスと、宛先が CDN・クラウドの接続を除く
+- S14：OS の DNS（`system_resolvers`：mDNSResponder・systemd-resolved 等）を除く
+- 署名：検証に失敗しても、変わったのがアプリの中のコード以外のファイル（言語ごとの文字列・画像等）だけなら `resources_modified` とし、S2b（40 点）ではなく新しい S2r（10 点）にする
+
 ## [0.5.4] - 2026-11-19
 ### 修正
 - N4（公開ドメインがローカルの IP に解決）：DoH でも引き直し、同じローカルの IP が返るなら、ドメインの持ち主が公開している記録（使われなくなった広告のドメイン等）として `private_answer_published` にし、点を付けない。DoH の答えが違う・引き直せないときは今までどおり N4。実機で pixel.advertising.com（192.168.18.7）と farm.plista.com（127.0.0.1）が、公開の DNS でも同じ答えを返していた

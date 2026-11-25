@@ -19,6 +19,7 @@ fn sig_label(status: &str) -> &str {
         "developer_id" => "Developer ID 署名",
         "signed_other" => "その他の署名",
         "invalid" => "署名の検証に失敗",
+        "resources_modified" => "署名の検証に失敗（コード以外のファイルだけが変更）",
         "adhoc" => "ad-hoc 署名（実質未署名）",
         "unsigned" => "未署名",
         "package" => "公式パッケージ",
@@ -49,6 +50,7 @@ fn finding_label(f: &str) -> &str {
         "private_answer" => "公開ドメインがローカルの IP に解決された",
         "private_answer_published" => "ローカルの IP を公開しているドメイン（DoH でも同じ答え）",
         "conflicting_answer" => "同じ問い合わせに違う応答が届いた",
+        "conflicting_answer_same_as" => "同じ問い合わせに違う応答（どれも同じ事業者の IP。CDN の揺れ）",
         "unexpected_resolver" => "設定にない DNS サーバーから応答",
         _ => f,
     }

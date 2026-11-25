@@ -5,7 +5,7 @@ use crate::config::Config;
 use crate::identity::{self, IdCache};
 use crate::notify::{self, Message, Notifier};
 use crate::procinfo::{basename, user_name, ProcCache};
-use crate::sockets::{listen_ports, Collector, Proto, Sock, State};
+use crate::sockets::{is_accepted, listen_ports, Collector, Listens, Proto, Sock, State};
 use crate::status::{AlertItem, Shared, Snapshot};
 use anyhow::{Context, Result};
 use chrono::{Local, SecondsFormat, Utc};
@@ -531,14 +531,12 @@ impl Monitor {
     }
 
     /// 新規ソケット 1 件を処理。記録したら true
-    fn handle_new(&mut self, s: &Sock, listens: &HashMap<(Proto, u16), ()>, initial: bool) -> Result<bool> {
+    fn handle_new(&mut self, s: &Sock, listens: &Listens, initial: bool) -> Result<bool> {
         let (kind, direction) = match (s.proto, s.state) {
             (Proto::Tcp, State::Listen) => ("listen", "inbound"),
             // UDP の未接続ソケットは一時ポートのものが大量にあるので、低いポートだけ「待受」とみなす
             (Proto::Udp, State::Unconnected) if s.local.port() != 0 && s.local.port() < 32768 => ("listen", "inbound"),
-            (Proto::Tcp, State::Established) if listens.contains_key(&(Proto::Tcp, s.local.port())) => {
-                ("accept", "inbound")
-            }
+            (Proto::Tcp, State::Established) if is_accepted(listens, Proto::Tcp, s.local) => ("accept", "inbound"),
             (Proto::Tcp, State::Established | State::SynSent) | (Proto::Udp, State::Established) => {
                 ("connect", "outbound")
             }
@@ -764,6 +762,11 @@ impl Monitor {
             window_s: self.cfg.volume.window_s,
             open_size: sum.total_size,
             out_per_open: (sum.total_size > 0).then(|| d.bytes as f64 / sum.total_size as f64),
+            own_profile_only: e
+                .process
+                .executable
+                .as_deref()
+                .is_some_and(|x| kanmon_core::volume::own_profile_only(x, &sum.paths)),
             open_paths: sum.paths,
             open_exts: sum.exts,
             open_top: sum.top,
@@ -955,7 +958,7 @@ impl Monitor {
         // 宛先（名前が分かるインターネットの宛先だけ。CDN の IP は変わるので、IP では見ない）
         let dom = e.destination.as_ref().and_then(|d| d.domain.clone());
         if let Some(d) = dom.filter(|_| e.network.scope.as_deref() == Some("internet")) {
-            let item = kanmon_core::dga::registered_domain(&d).unwrap_or(d);
+            let item = profile::dest_item(&d);
             let st = self.store.baseline_stats(proc_key, "pdest")?;
             let first = self.profile_touch(proc_key, &item, "pdest", now)?;
             f.stable = profile::stable(
@@ -1054,8 +1057,13 @@ impl Monitor {
         let watched = dnsguard::watched(&q, &self.cfg.dns.watch_domains);
         // N5：同じ問い合わせに中身の違う応答
         if let Some((prev, cur)) = self.conflicts.observe(server, client, client_port, msg.id, &q, &ips, now) {
+            // 2 つの答えがどれも相手側と同じ AS なら、CDN が問い合わせごとに答えを変えただけ（v0.5.5）
+            let same_as = self.asn.as_ref().is_some_and(|db| {
+                let asns = |v: &[IpAddr]| v.iter().map(|ip| db.lookup(*ip).map(|a| a.number)).collect::<Vec<_>>();
+                dnsguard::same_as_answers(&asns(&prev), &asns(&cur))
+            });
             let facts = ev::DnsFacts {
-                finding: "conflicting_answer".into(),
+                finding: if same_as { "conflicting_answer_same_as" } else { "conflicting_answer" }.into(),
                 watched,
                 server: Some(server.to_string()),
                 other: prev.iter().map(|x| x.to_string()).collect(),
@@ -1283,6 +1291,17 @@ impl Monitor {
                     removed: c.removed.iter().map(|x| x.to_string()).collect(),
                     added_scope: Some(c.added_scope.into()),
                     unknown_public: !c.unknown_public.is_empty(),
+                    // 見慣れないサーバーがどれも住宅用回線（回線事業者）の AS なら、DHCP で配られた
+                    // 回線事業者の DNS（WARP を切ったとき等）。N2p を付けない（v0.5.5）
+                    unknown_public_isp: !c.unknown_public.is_empty()
+                        && self.asn.as_ref().is_some_and(|db| {
+                            let res = self.dets.list("residential_asns");
+                            c.unknown_public.iter().all(|ip| {
+                                db.lookup(*ip).is_some_and(|a| {
+                                    kanmon_core::asn::net_type(a.number, &[], &[], res) == "residential"
+                                })
+                            })
+                        }),
                     ..Default::default()
                 };
                 self.emit_dns(facts, None, &[], None, format!("resolvers|{new_s}"));

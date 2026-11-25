@@ -135,6 +135,50 @@ pub fn summarize_open(files: &[(String, u64)]) -> OpenSummary {
     }
 }
 
+/// ブラウザの部品を使うアプリ（Electron・Chromium の埋め込み）が持つ、ログイン情報のファイルの目印
+pub const PROFILE_SECRETS: &[&str] = &["/Cookies", "/Login Data"];
+
+/// 実行ファイルのパスから、アプリのデータフォルダの名前の候補を作る。
+/// `/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/.../Codex (Aperitif).app/...`
+/// → `ChatGPT`・`Codex`。`Claude Helper.app` → `Claude`
+fn app_names(exe: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for comp in exe.split('/') {
+        let stem = comp.strip_suffix(".app").or_else(|| comp.strip_suffix(".framework"));
+        let Some(stem) = stem else { continue };
+        let mut n = stem;
+        for cut in [" Helper", " (", " Framework"] {
+            if let Some(i) = n.find(cut) {
+                n = &n[..i];
+            }
+        }
+        let n = n.trim();
+        if !n.is_empty() && !out.iter().any(|x| x == n) {
+            out.push(n.to_string());
+        }
+    }
+    out
+}
+
+/// 開いているログイン情報のファイル（Cookies 等）が、どれもそのアプリ自身のデータフォルダの下か（v0.5.5）。
+/// Electron・Chromium を埋め込んだアプリ（Claude・ChatGPT の Codex 等）は、自分の Cookies を開いたまま通信する。
+/// 他のアプリの Cookies（例：Chrome の）を開いて送るのは情報窃取の形なので、偽になる。
+/// アプリの中（`.app/Contents/`）の実行ファイルでないとき・該当のファイルが無いときも偽
+pub fn own_profile_only(exe: &str, open_paths: &[String]) -> bool {
+    if !exe.contains(".app/Contents/") {
+        return false;
+    }
+    let names = app_names(exe);
+    let secrets: Vec<&String> = open_paths.iter().filter(|p| PROFILE_SECRETS.iter().any(|m| p.contains(m))).collect();
+    !secrets.is_empty()
+        && secrets.iter().all(|p| {
+            names.iter().any(|n| {
+                // サンドボックスのアプリは ~/Library/Containers/<ID>/Data/Library/Application Support/<名前>/ の下
+                p.contains(&format!("/Library/Application Support/{n}/"))
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +234,32 @@ mod tests {
         assert_eq!(s.total_size, 4_952_000_300);
         assert!(s.top[0].ends_with("(4.6 GB)"), "{:?}", s.top);
         assert_eq!(human_bytes(512), "512 B");
+    }
+
+    #[test]
+    fn own_profile() {
+        let codex = "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Versions/157.0.8103.78/Helpers/Codex (Aperitif).app/Contents/MacOS/Codex (Aperitif)";
+        let p = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(own_profile_only(
+            codex,
+            &p(&[
+                "/Users/u/Library/Application Support/Codex/Default/Cookies",
+                "/Users/u/Library/Application Support/Codex/codex-browser-app/Cookies",
+                "/usr/lib/dyld",
+            ])
+        ));
+        let claude = "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper";
+        assert!(own_profile_only(claude, &p(&["/Users/u/Library/Application Support/Claude/Cookies"])));
+        // 他のアプリ（Chrome）の Cookies を開いて送るのは当てる
+        assert!(!own_profile_only(
+            claude,
+            &p(&[
+                "/Users/u/Library/Application Support/Claude/Cookies",
+                "/Users/u/Library/Application Support/Google/Chrome/Default/Cookies",
+            ])
+        ));
+        // アプリの外の実行ファイル・該当のファイルが無いときは偽
+        assert!(!own_profile_only("/tmp/x/Claude", &p(&["/Users/u/Library/Application Support/Claude/Cookies"])));
+        assert!(!own_profile_only(claude, &p(&["/usr/lib/dyld"])));
     }
 }

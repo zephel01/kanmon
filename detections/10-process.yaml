@@ -19,6 +19,14 @@ detections:
     description: 署名の検証に失敗（改ざんの疑い）
     when: { field: process.code_signature.status, op: eq, value: invalid }
 
+  - id: S2r
+    name: resources_modified
+    points: 10
+    # 署名の検証は失敗したが、変わったのはアプリの中のコード以外のファイル（言語ごとの文字列・画像等）だけ。
+    # コードは改ざんされていない。アプリが自分の設定を書き換える例がある（実機で Wondershare。v0.5.5）
+    description: 署名の検証に失敗したが、変わったのはコード以外のファイルだけ
+    when: { field: process.code_signature.status, op: eq, value: resources_modified }
+
   - id: S3
     name: new_binary
     points: 15

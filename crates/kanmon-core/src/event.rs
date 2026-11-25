@@ -107,6 +107,9 @@ pub struct DnsFacts {
     /// インターネット上の、よく使われる公開 DNS でもないサーバーが追加された
     #[serde(default)]
     pub unknown_public: bool,
+    /// その見慣れないサーバーが、どれも住宅用回線（回線事業者）の AS にある（v0.5.5）
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unknown_public_isp: bool,
     /// 応答を返した DNS サーバー
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server: Option<String>,
@@ -390,6 +393,9 @@ pub struct BytesFacts {
     /// 開いているファイルのパス（容量の大きい順、最大 128 件）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_paths: Vec<String>,
+    /// 開いているログイン情報のファイル（Cookies 等）が、どれもアプリ自身のデータフォルダの下（v0.5.5）
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own_profile_only: bool,
     /// 開いているファイルの拡張子（小文字）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub open_exts: Vec<String>,

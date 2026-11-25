@@ -236,6 +236,18 @@ echo "[E] 疑似ビーコン：1 秒周期 × 10 回（S7）"
 sleep 12  # ビーコン集計を待つ
 
 echo "[F] 状態ソケット（メニューバーアプリ用）"
+echo "[U] ループバックの待受と同じ番号の手元のポートから外へつないでも、着信にしない（S16 の誤判定、v0.5.5）"
+python3 - "$W/u-ports.txt" <<'PY'
+import socket, sys, time
+# 外へ出るときの手元の IP（UDP の connect はパケットを送らない）
+u = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); u.connect(("203.0.113.1", 9)); ip = u.getsockname()[0]; u.close()
+lo = socket.socket(); lo.bind(("127.0.0.1", 0)); lo.listen(); port = lo.getsockname()[1]
+srv = socket.socket(); srv.bind((ip, 0)); srv.listen(); q = srv.getsockname()[1]
+c = socket.socket(); c.bind((ip, port)); c.connect((ip, q)); a, _ = srv.accept()
+open(sys.argv[1], "w").write(f"{port} {q}")
+time.sleep(2.5)
+PY
+
 echo "[R] 住宅用回線の IP へ直接（R1、destination.as・geo・net_type）"
 cp "$W/netclient" "$W/asn-probe"
 "$W/asn-probe" 203.0.113.205 443 1 0 1500
@@ -353,6 +365,10 @@ check("T: 書き出しは伏せ済み（ホスト名・引数・ドメインが�
       and "DOMAIN-" in ex_raw and len(ex.get("jsonl", "").splitlines()) == ex["count"]
       and "| レベル | 件数 |" in ex.get("markdown", ""))
 print("  export:", ex.get("count"), "件、truncated", ex.get("truncated"))
+up, uq = map(int, open(sys.argv[1].replace("events.jsonl", "u-ports.txt")).read().split())
+u_acc = find(lambda e: e["network"]["kind"] == "accept" and e.get("source", {}).get("port") == up)
+u_con = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination", {}).get("port") == uq)
+check("U: ループバックの待受と同じ番号でも、外へつなぐ接続は connect（accept にしない）", u_con and not u_acc)
 st2 = json.load(open(sys.argv[1].replace("events.jsonl", "status-restart.json")))
 check("I: 再起動後も直近の警告が残る", any(a["level"] == "critical" for a in st2.get("alerts", [])))
 c2 = st2.get("counts_24h", {})

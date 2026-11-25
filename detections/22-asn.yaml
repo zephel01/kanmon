@@ -65,6 +65,8 @@ detections:
         - { field: kanmon.net_type, op: eq, value: residential }
         - not:
             any:
+              # 時刻合わせ（NTP の pool は回線事業者の中にもある。v0.5.5）
+              - { field: destination.port, op: eq, value: 123 }
               - { field: process.name, op: in, value: "@browsers", ci: true }
               - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
               - { field: process.name, op: in, value: "@p2p_apps", ci: true }
@@ -85,6 +87,10 @@ detections:
         - not:
             any:
               - { field: destination.port, op: in, value: [53, 123, 853] }
+              # macOS は DNS の答えを mDNSResponder が覚えていて、アプリが聞き直さないので名前が見えないことが多い。
+              # OS 付属のプロセスと、宛先が CDN・クラウドの接続は外す（実機で 1 週間に約 900 件。v0.5.5）
+              - { field: process.code_signature.status, op: eq, value: apple }
+              - { field: kanmon.net_type, op: in, value: [cloud, cdn] }
               - { field: process.name, op: in, value: "@browsers", ci: true }
               - { field: process.name, op: prefix, value: "@browser_prefixes", ci: true }
               - { field: process.name, op: in, value: "@p2p_apps", ci: true }

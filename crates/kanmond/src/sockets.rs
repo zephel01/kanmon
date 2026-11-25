@@ -356,13 +356,33 @@ impl Collector {
     }
 }
 
-/// 待受ポート集合（プロトコル, ポート）
-pub fn listen_ports(socks: &[Sock]) -> HashMap<(Proto, u16), ()> {
-    socks
-        .iter()
-        .filter(|s| s.state == State::Listen || (s.proto == Proto::Udp && s.state == State::Unconnected))
-        .map(|s| ((s.proto, s.local.port()), ()))
-        .collect()
+/// 待受の集合（プロトコル, ポート）→ 待ち受けている IP の一覧
+pub type Listens = HashMap<(Proto, u16), Vec<std::net::IpAddr>>;
+
+pub fn listen_ports(socks: &[Sock]) -> Listens {
+    let mut m: Listens = HashMap::new();
+    for s in
+        socks.iter().filter(|s| s.state == State::Listen || (s.proto == Proto::Udp && s.state == State::Unconnected))
+    {
+        m.entry((s.proto, s.local.port())).or_default().push(s.local.ip());
+    }
+    m
+}
+
+/// 確立済みの接続が、手元の待受に入ってきたもの（着信）か。
+/// ポートの番号だけで決めると、ループバックだけで待つポートと同じ番号を外向きの接続が
+/// たまたま使ったときに「着信」になる（v0.5.5、実機で S16 の誤検知）。待受の IP も合わせて見る
+pub fn is_accepted(listens: &Listens, proto: Proto, local: std::net::SocketAddr) -> bool {
+    let Some(ips) = listens.get(&(proto, local.port())) else { return false };
+    let l = canonical(local.ip());
+    ips.iter().any(|ip| ip.is_unspecified() || canonical(*ip) == l)
+}
+
+fn canonical(ip: std::net::IpAddr) -> std::net::IpAddr {
+    match ip {
+        std::net::IpAddr::V6(v) => v.to_ipv4_mapped().map(std::net::IpAddr::V4).unwrap_or(ip),
+        x => x,
+    }
 }
 
 #[cfg(test)]
@@ -432,5 +452,26 @@ mod tests {
         assert_eq!((v[2].pid, v[2].uid, v[2].state), (Some(88), Some(65), State::Unconnected));
         assert_eq!(v[3].local.to_string(), "[fe80::1]:5353");
         assert_eq!(v[4].state, State::SynSent);
+    }
+
+    #[test]
+    fn accepted_needs_matching_listen_ip() {
+        let lst = |ip: &str, port: u16| Sock {
+            proto: Proto::Tcp,
+            state: State::Listen,
+            local: format!("{ip}:{port}").parse().unwrap(),
+            remote: None,
+            pid: None,
+            uid: None,
+            inode: 0,
+        };
+        let l = listen_ports(&[lst("127.0.0.1", 50954), lst("0.0.0.0", 8080), lst("[::]", 9090)]);
+        // ループバックだけの待受と同じ番号を、外向きの接続が使っても着信ではない
+        assert!(!is_accepted(&l, Proto::Tcp, "192.168.1.10:50954".parse().unwrap()));
+        assert!(is_accepted(&l, Proto::Tcp, "127.0.0.1:50954".parse().unwrap()));
+        // すべての IP で待つポートは着信
+        assert!(is_accepted(&l, Proto::Tcp, "192.168.1.10:8080".parse().unwrap()));
+        assert!(is_accepted(&l, Proto::Tcp, "[::ffff:192.168.1.10]:9090".parse().unwrap()));
+        assert!(!is_accepted(&l, Proto::Tcp, "192.168.1.10:1234".parse().unwrap()));
     }
 }

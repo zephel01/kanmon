@@ -104,10 +104,73 @@ fn platform_identity(path: &str) -> Identity {
         };
         // --strict だけ失敗するもの（バンドル構造の細かい差）は改ざんとはみなさない
         if !verify(true) && !verify(false) {
-            id.status = "invalid".into();
+            // 失敗の理由が「コード以外のファイル（言語ごとの文字列・画像等）の書き換え」だけなら、
+            // コードは改ざんされていない。アプリが自分の設定を書き換える例がある（v0.5.5）
+            let detail = Command::new("/usr/bin/codesign")
+                .args(["--verify", "--verbose=2", path])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stderr).into_owned())
+                .unwrap_or_default();
+            id.status = if resources_only_change(&detail) { "resources_modified" } else { "invalid" }.into();
         }
     }
     id
+}
+
+/// コード以外と見なすファイルの拡張子（実行されないもの）。スクリプトや拡張子の無いファイルは入れない
+const DATA_EXTS: &[&str] = &[
+    "strings",
+    "stringsdict",
+    "plist",
+    "nib",
+    "storyboardc",
+    "car",
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "tiff",
+    "icns",
+    "svg",
+    "pdf",
+    "json",
+    "xml",
+    "txt",
+    "rtf",
+    "html",
+    "css",
+    "ttf",
+    "otf",
+    "mov",
+    "mp3",
+    "mp4",
+    "wav",
+    "caf",
+    "aiff",
+];
+
+/// `codesign --verify --verbose=2` の失敗の出力が、`Contents/Resources/` の下のデータのファイルの
+/// 変更・追加・欠落だけか。コード（実行ファイル・ライブラリ・スクリプト等）が 1 つでもあれば偽
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn resources_only_change(stderr: &str) -> bool {
+    if !stderr.contains("a sealed resource is missing or invalid") {
+        return false;
+    }
+    let files: Vec<&str> = stderr
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            ["file modified: ", "file added: ", "file missing: "].iter().find_map(|p| l.strip_prefix(p))
+        })
+        .collect();
+    !files.is_empty()
+        && files.iter().all(|f| {
+            let ext = f.rsplit_once('.').map(|x| x.1.to_ascii_lowercase()).unwrap_or_default();
+            f.contains(".app/Contents/Resources/")
+                && DATA_EXTS.contains(&ext.as_str())
+                && !f.contains(".framework/")
+                && !f.contains(".bundle/")
+        })
 }
 
 /// macOS が封印・検証している読み取り専用の領域（Signed System Volume・Cryptex）
@@ -287,5 +350,26 @@ mod tests {
         assert_eq!(proc_key(&i, Some("/tmp/x"), None), "sha256:ab");
         let p = Identity { status: "package".into(), package: Some("curl".into()), ..Default::default() };
         assert_eq!(proc_key(&p, Some("/usr/bin/curl"), Some("s")), "pkg:curl:/usr/bin/curl|script:s");
+    }
+
+    #[test]
+    fn resources_only() {
+        let ws = "/Applications/X.app: a sealed resource is missing or invalid
+file modified: /Applications/X.app/Contents/Resources/ja.lproj/InfoPlist.strings
+file modified: /Applications/X.app/Contents/Resources/en.lproj/InfoPlist.strings
+";
+        assert!(resources_only_change(ws));
+        // コード（dylib・スクリプト・拡張子なし・MacOS の下）が混ざれば偽
+        for bad in [
+            "file modified: /Applications/X.app/Contents/MacOS/X",
+            "file modified: /Applications/X.app/Contents/Resources/helper.dylib",
+            "file added: /Applications/X.app/Contents/Resources/run.sh",
+            "file modified: /Applications/X.app/Contents/Resources/tool",
+            "file modified: /Applications/X.app/Contents/Frameworks/Y.framework/Resources/Info.plist",
+        ] {
+            assert!(!resources_only_change(&format!("{ws}{bad}\n")), "{bad}");
+        }
+        assert!(!resources_only_change("/Applications/X.app: code object is not signed at all"));
+        assert!(!resources_only_change("/Applications/X.app: a sealed resource is missing or invalid\n"));
     }
 }
