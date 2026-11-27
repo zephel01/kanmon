@@ -41,7 +41,8 @@ pub fn start_epoch(start: u64) -> Option<i64> {
     }
 }
 
-/// Linux：起動時刻（btime）＋ 刻み ÷ 1 秒あたりの刻み
+/// Linux：起動時刻（btime）＋ 刻み ÷ 1 秒あたりの刻み（macOS ではテストだけが使う）
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn ticks_to_epoch(btime: i64, ticks: u64, hz: u64) -> i64 {
     btime + (ticks / hz.max(1)) as i64
 }

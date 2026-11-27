@@ -51,7 +51,10 @@ jobs:
         with:
           ref: v${{ needs.release.outputs.ver }}
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y libpcap-dev
+      - run: |
+          # 外部のリポジトリ（packages.microsoft.com 等）の失敗で止めない。取れた一覧で入れる
+          sudo apt-get -o Acquire::Retries=5 update || echo '::warning::apt-get update が一部失敗（取れた一覧で続ける）'
+          sudo apt-get -o Acquire::Retries=5 install -y libpcap-dev
       - run: cargo build --release -p kanmond -p kanmonctl
       - uses: taiki-e/install-action@v2
         with:
