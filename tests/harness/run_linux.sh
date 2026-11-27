@@ -271,6 +271,24 @@ s.sendall(b'{"cmd":"export","hours":1,"min_level":"info","format":"jsonl","domai
 print(s.makefile().readline().strip())
 PY
 
+echo "[W] ブラウザの履歴ビューア（kanmonctl web）：トークン・Host の検査と、つながりの木"
+"$KANMONCTL" web --no-open --port 18099 --socket "$W/kanmond.sock" --idle-exit 30 > "$W/web.out" 2>&1 &
+WB=$!
+for i in $(seq 1 25); do grep -q '?t=' "$W/web.out" 2>/dev/null && break; sleep 0.2; done
+TOK=$(grep -o 't=[0-9a-f]*' "$W/web.out" | head -1 | cut -c3-)
+WU="http://127.0.0.1:18099"
+{
+  curl -s -o /dev/null -w '%{http_code}\n' "$WU/?t=$TOK"
+  curl -s -o /dev/null -w '%{http_code}\n' "$WU/?t=bad"
+  curl -s -o /dev/null -w '%{http_code}\n' -H "Host: evil.example:18099" "$WU/?t=$TOK"
+  curl -s -o /dev/null -w '%{http_code}\n' "$WU/api/tree?hours=1"
+  curl -s -o /dev/null -w '%{http_code}\n' -H "X-Kanmon-Token: $TOK" "$WU/api/export?hours=1"
+} > "$W/web-codes.txt"
+curl -s -H "X-Kanmon-Token: $TOK" "$WU/api/tree?hours=1" > "$W/web-tree.json"
+curl -s -H "X-Kanmon-Token: $TOK" "$WU/api/history?hours=1&level=info&q=curl" > "$W/web-history.json"
+curl -s -D "$W/web-headers.txt" -o /dev/null "$WU/app.js"
+kill $WB 2>/dev/null; wait $WB 2>/dev/null || true
+
 kill $D; wait $D 2>/dev/null || true
 sleep 0.5
 
@@ -422,6 +440,24 @@ va = open(sys.argv[1].replace("events.jsonl", "alerts-d.txt")).read()
 check("V: kanmonctl alerts が .gz の中の critical を読む", "critical 以上: 1 件" in va)
 vr = [l for l in open(sys.argv[1].replace("events.jsonl", "replay-d.jsonl")) if l.strip().startswith("{")]
 check("V: kanmonctl replay が .gz を読む", len(vr) >= 1)
+wd = lambda n: sys.argv[1].replace("events.jsonl", n)
+codes = open(wd("web-codes.txt")).read().split()
+check("W: ページはトークンが合うときだけ。違う Host・トークン無しの API・書き出しは断る", codes == ["200", "403", "403", "403", "404"])
+try:
+    wt = json.load(open(wd("web-tree.json")))
+except Exception:
+    wt = {"nodes": []}
+wn = wt.get("nodes", [])
+wc = [n for n in wn if n.get("name") == "curl" and any(a.get("target") == "203.0.113.79" and a.get("port") == 443 for a in n.get("activity", []))]
+check("W: つながりの木で curl の親が kanmon-parent、接続先 203.0.113.79:443 がぶら下がる",
+      bool(wc) and wc[0].get("parent") is not None and wn[wc[0]["parent"]].get("name") == "kanmon-parent")
+check("W: プロセスの開始時刻（process.start）が入る", bool(wc) and bool(wc[0].get("start")))
+try:
+    wh = json.load(open(wd("web-history.json")))
+except Exception:
+    wh = {}
+check("W: 履歴の一覧を文字列で絞れる", any(i.get("process") == "curl" for i in wh.get("items", [])))
+check("W: 画面の部品に CSP と nosniff が付く", "content-security-policy: default-src 'none'" in open(wd("web-headers.txt")).read().lower())
 print("RESULT:", "OK" if ok else "NG")
 sys.exit(0 if ok else 1)
 PY

@@ -59,6 +59,8 @@ detections:
 | `process.code_signature.status` | apple / app_store / developer_id / signed_other / invalid / resources_modified（検証に失敗したが、変わったのはアプリの中のコード以外のファイルだけ。v0.5.5）/ adhoc / unsigned / package / unmanaged / unknown |
 | `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
 | `process.hash.sha256` / `proc_key` | ハッシュ、安定識別キー |
+| `process.start` / `process.parent.start` | 開始時刻（RFC 3339）。pid の使い回しを見分ける（v0.5.7） |
+| `process.ancestors` | 親から上へ最大 6 段の祖先（`pid`・`name`・`start`）。ブラウザの「つながり」で親子の木を組むのに使う（v0.5.7） |
 | `process.parent.name` / `parent_chain` | 親プロセス、親から上へ最大 6 段の実行ファイル名。インタプリタはスクリプト名も入る（`node …/npm-cli.js` → `node`・`npm-cli.js`、`python -m pip` → `pip`） |
 | `process.exe_deleted` / `memfd` / `hidden` / `interpreter` / `script` | 削除済み、メモリ上（memfd）、隠しファイル、インタプリタとスクリプト |
 | `process.file_age_s` / `first_seen_age_s` | 実行ファイルの更新からの秒数、kanmon が初めて見てからの秒数 |

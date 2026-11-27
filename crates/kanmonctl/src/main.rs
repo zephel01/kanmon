@@ -14,6 +14,7 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 mod inspect;
+mod web;
 
 #[derive(Parser)]
 #[command(version, about = "kanmon CLI")]
@@ -142,6 +143,21 @@ enum Cmd {
         #[arg(long)]
         as_of: Option<String>,
     },
+    /// 脅威の履歴とプロセスのつながりをブラウザで見る（127.0.0.1 だけで待ち受ける。読み取り専用）
+    Web {
+        /// kanmond の状態ソケット
+        #[arg(long, default_value = default_socket())]
+        socket: PathBuf,
+        /// 待ち受けのポート（0 は空いているものを選ぶ）
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+        /// ブラウザを開かない（URL を表示するだけ）
+        #[arg(long)]
+        no_open: bool,
+        /// この秒数のあいだ要求が無ければ終わる（0 は終わらない）
+        #[arg(long, default_value_t = 0)]
+        idle_exit: u64,
+    },
     /// 直近のレベル別件数とスコア上位
     Status {
         #[arg(long, default_value = default_db())]
@@ -184,6 +200,14 @@ const fn default_jsonl() -> &'static str {
         "/Library/Logs/kanmon/events.jsonl"
     } else {
         "/var/log/kanmon/events.jsonl"
+    }
+}
+
+const fn default_socket() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "/var/run/kanmond.sock"
+    } else {
+        "/run/kanmon/kanmond.sock"
     }
 }
 
@@ -513,6 +537,9 @@ fn main() -> Result<()> {
             if code != 0 {
                 std::process::exit(code);
             }
+        }
+        Cmd::Web { socket, port, no_open, idle_exit } => {
+            web::run(web::Options { socket, port, open: !no_open, idle_exit })?;
         }
         Cmd::Export { db, events, hours, min_level, summary, domains, paths_basename, round_time, map } => {
             use kanmon_core::redact::{summarize, DomainMode, Options, Redactor};

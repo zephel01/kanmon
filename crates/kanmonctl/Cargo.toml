@@ -19,6 +19,8 @@ base64.workspace = true
 flate2.workspace = true
 tar.workspace = true
 zip.workspace = true
+# web：手元の 127.0.0.1 だけで待ち受ける小さな HTTP サーバー
+tiny_http = "0.12"
 # inspect の取得：OS の証明書（社内の TLS 検査等）も信頼する。検証は外さない
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
