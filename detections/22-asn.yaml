@@ -45,7 +45,45 @@ lists:
      "4766", # Korea Telecom
      "3462", # HiNet
      "5089", # Virgin Media
-     "1221"] # Telstra
+     "1221", # Telstra
+     # v0.5.6 で追加（家庭向けが主の回線事業者。中継網と混ざる大手の幹線 AS は入れない）
+     "2510", # INFOWEB（ニフティ）
+     "2519", # ARTERIA（VECTANT）
+     "18126", # 中部テレコミュニケーション（コミュファ）
+     "7679", # QTnet
+     "10010", # TOKAI コミュニケーションズ
+     "138384", # 楽天モバイル
+     "7018", # AT&T
+     "22773", # Cox
+     "20001", # Charter（旧 Time Warner Cable）
+     "6128", # Optimum
+     "5650", # Frontier
+     "812", # Rogers
+     "577", # Bell Canada
+     "6327", # Shaw
+     "12322", # Free
+     "5410", # Bouygues Telecom
+     "15557", # SFR
+     "3352", # Telefonica España
+     "3269", # Telecom Italia
+     "1136", # KPN
+     "33915", # VodafoneZiggo
+     "3209", # Vodafone Deutschland
+     "6805", # Telefonica Deutschland
+     "9318", # SK Broadband
+     "17858", # LG U+
+     "9924", # Taiwan Fixed Network
+     "4788", # TM（マレーシア）
+     "7713", # Telkom Indonesia
+     "9299", # PLDT
+     "45899", # VNPT
+     "7552", # Viettel
+     "24560", # Bharti Airtel
+     "55836", # Reliance Jio
+     "7545", # TPG
+     "12389", # Rostelecom
+     "8151", # Telmex
+     "28573"] # Claro Brasil
   # 相手の PC と直接つなぐのが普通なもの（ビデオ会議・VPN・P2P・画面共有）。R1・R2 の除外
   p2p_apps:
     [tailscaled, tailscale, Tailscale, "IPNExtension", warp-svc, "Cloudflare WARP", "zoom.us", zoom, ZoomWebviewHost,
