@@ -30,8 +30,8 @@
 | `[volume] interval_s` / `window_s` / `min_report_kb` | 10 / 600 / 1024 | 送信量を読む間隔、合計する窓（秒）、報告する最小量（KB）。macOS は nettop、Linux は sock_diag で読む |
 | `[persistence] roots` / `interval_s` / `max_depth` / `system` | `["~/kanmon-work"]` / 3600 / 6 / true | 居座りの走査。`~/` はログイン中のユーザーのホーム。`node_modules` 等は潜らない。初回は基準の記録だけで、以後は追加・変更をイベントにする。`system` はシステム全体の自動起動とシステムの Python も見る |
 | `[persistence] watch_s` / `recent_window_s` | 60 / 86400 | site-packages の更新時刻を見る間隔（変わったら走査し直す。0 で無効）/ 仕掛けが増えてから通信と結び付けて見る期間 |
-| `[jsonl] rotate` / `keep_days` | `size` / 30 | `daily` にすると `events.YYYY-MM-DD.jsonl` に日付ごとに切り替え、`keep_days` 日残す（同じ日に `max_mb` を超えたら番号付き） |
-| `[log] path` / `keep_days` | macOS `/Library/Logs/kanmon/kanmond.log`、Linux 空（journald） / 14 | kanmond の動作ログ。日付が変わると `kanmond.YYYY-MM-DD.log` に切り替え、`keep_days` 日残す |
+| `[jsonl] rotate` / `keep_days` / `compress` | `daily` / 14 / true | `daily` は日付が変わると `events.YYYY-MM-DD.jsonl` に切り替え、`keep_days` 日残す（同じ日に `max_mb` を超えたら番号付き）。`compress` なら前の日のファイルを `events.YYYY-MM-DD.jsonl.gz` にする（`kanmonctl alerts`・`replay` はそのまま読める。`zcat` でも読める）。`size` にすると `events.jsonl.1` … `.keep` のサイズごと（圧縮しない）。v0.5.5 までの既定は `size` / 30 |
+| `[log] path` / `keep_days` / `compress` | macOS `/Library/Logs/kanmon/kanmond.log`、Linux 空（journald） / 14 / true | kanmond の動作ログ。日付が変わると `kanmond.YYYY-MM-DD.log` に切り替え（`compress` なら `.log.gz`）、`keep_days` 日残す |
 | `[dns] private_ok_suffixes` | 空 | プライベート IP に解決されても知らせない接尾辞（社内ドメイン等）。`.local`・`.test`・`ts.net` 等は最初から対象外 |
 
 ## 更新・起動・停止

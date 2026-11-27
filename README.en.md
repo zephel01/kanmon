@@ -58,6 +58,8 @@ sudo packaging/install-linux.sh     # Linux (systemd)
 ```
 To update, run `git pull`, `cargo build --release` and the install script again. The install script stops if the built binaries' version does not match the repository's, so a stale build is never installed.
 
+Updates never overwrite your config. Since v0.5.6 the default log rotation is daily, keeping 14 days and gzipping each previous day, but installs from v0.5.5 or earlier still have `rotate = "size"` in their config. To switch, set `rotate = "daily"` and `keep_days = 14` under `[jsonl]` in the config (`/Library/Application Support/kanmon/etc/kanmon.toml` on macOS, `/etc/kanmon/kanmon.toml` on Linux) and restart kanmond.
+
 Linux packages (.deb / .rpm) from the [releases](https://github.com/zephel01/kanmon/releases). They do not start the service automatically; review the config first, then enable it:
 ```bash
 sudo apt install ./kanmon_0.4.0-1_amd64.deb        # Debian 12, Ubuntu 22.04 and later

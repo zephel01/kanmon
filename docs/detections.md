@@ -15,7 +15,7 @@ sudo install -o root -m 0644 ./my-rule.yaml /etc/kanmon/detections/
 ```
 - 配置したルールに誤りがあると、デーモンは前のルールのまま動き続け、通知でそのことを知らせます。
 - root で動かしている間は、root 所有かつ group/other が書き込めないファイルしか読みません（`strict_owner`）。一般ユーザー権限のマルウェアが「自分の点を下げるルール」を置けないようにするためです。
-- ローテーション済みのログ（`events.jsonl.1` 等）も `--events` に渡せます。`-` を渡すと標準入力から読みます。
+- 切り替え済みのログ（`events.YYYY-MM-DD.jsonl.gz`・`events.jsonl.1` 等）も `--events` に渡せます。`.gz` は展開しながら読みます。`-` を渡すと標準入力から読みます。
 
 macOS のパスは `/Library/Application Support/kanmon/etc/detections` と `/Library/Logs/kanmon/events.jsonl` です。
 
