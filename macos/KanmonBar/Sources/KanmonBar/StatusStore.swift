@@ -114,4 +114,41 @@ final class StatusStore: ObservableObject {
         guard let p = snapshot?.eventsPath else { return }
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p)])
     }
+
+    /// `kanmonctl web` を起動し、ブラウザで履歴を開く（v0.5.7）。
+    /// 127.0.0.1 だけで待ち受け、30 分のあいだ使われなければ自分で終わる。開き直すたびに新しいトークンで起動し直す
+    private var webProcess: Process?
+
+    func openWeb() {
+        if let p = webProcess, p.isRunning { p.terminate() }
+        let candidates = ["/usr/local/bin/kanmonctl", "/opt/homebrew/bin/kanmonctl"]
+        guard let exe = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+            showWebError("kanmonctl が見つかりません（/usr/local/bin/kanmonctl）。packaging/install-macos.sh で入れ直してください。")
+            return
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: exe)
+        // シェルを通さず、引数として渡す。ブラウザは kanmonctl が open で開く
+        p.arguments = ["web", "--socket", socketPath, "--idle-exit", "1800"]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do {
+            try p.run()
+            webProcess = p
+        } catch {
+            showWebError("kanmonctl web を起動できません: \(error.localizedDescription)")
+        }
+    }
+
+    func stopWeb() {
+        if let p = webProcess, p.isRunning { p.terminate() }
+        webProcess = nil
+    }
+
+    private func showWebError(_ text: String) {
+        let a = NSAlert()
+        a.messageText = "ブラウザで開けませんでした"
+        a.informativeText = text
+        a.runModal()
+    }
 }

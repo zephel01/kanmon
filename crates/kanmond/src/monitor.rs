@@ -829,6 +829,14 @@ impl Monitor {
                 now_s,
             )?;
             let chain = self.procs.parent_chain(p.ppid, 6);
+            let ancestors: Vec<ev::Ancestor> = chain
+                .iter()
+                .map(|(apid, aexe, _)| ev::Ancestor {
+                    pid: *apid,
+                    name: aexe.as_deref().map(basename),
+                    start: self.procs.get(*apid).and_then(|a| crate::procinfo::start_rfc3339(a.start)),
+                })
+                .collect();
             let uid = p.uid.or(fallback_uid);
             let process = ev::Process {
                 pid: Some(pid),
@@ -848,8 +856,11 @@ impl Monitor {
                     pid: *ppid,
                     name: exe.as_deref().map(basename),
                     executable: exe.clone(),
+                    start: ancestors.first().and_then(|a| a.start.clone()),
                 }),
                 parent_chain: chain_names(&chain, &self.cfg.interpreters),
+                start: crate::procinfo::start_rfc3339(p.start),
+                ancestors,
                 exe_deleted: p.exe_deleted,
                 memfd: p.memfd,
                 interpreter: script.is_some(),

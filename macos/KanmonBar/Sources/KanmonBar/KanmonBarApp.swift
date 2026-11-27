@@ -134,13 +134,17 @@ struct MenuView: View {
                     .disabled(store.unreadCount == 0)
                 Button("一覧") { store.windows.showList(level: "all", path: store.socketPath) }
                     .disabled(store.snapshot == nil)
-                Button("ログを表示") { store.revealLog() }
+                Button("ブラウザ") { store.openWeb() }
                     .disabled(store.snapshot == nil)
+                    .help("脅威の履歴とプロセスのつながりをブラウザで見ます（このマシンだけ。読み取り専用）")
+                Button("ログ") { store.revealLog() }
+                    .disabled(store.snapshot == nil)
+                    .help("ログのファイルを Finder で表示します")
                 Button("書き出す…") { store.windows.showExport(path: store.socketPath) }
                     .disabled(store.snapshot == nil)
                     .help("IP・ホスト名などを伏せて、集計の表やログを書き出します（記事・Issue 向け）")
                 Spacer()
-                Button("終了") { NSApp.terminate(nil) }
+                Button("終了") { store.stopWeb(); NSApp.terminate(nil) }
             }
             .font(.callout)
         }

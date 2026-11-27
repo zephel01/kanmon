@@ -8,6 +8,13 @@
 //!     "paths":"full","round_time":false}` → 共有用に伏せた集計（Markdown）とログ（v0.5.3）。
 //!     伏せるのは kanmond（root）の中で行い、ソケットの外へは伏せた後のデータだけを出す
 //!     （DB を読み取り専用で開いて読む。level は all / notice / warn / critical）
+//!   - ブラウザの履歴ビューア（`kanmonctl web`、v0.5.7）用。どれも読み取りだけで、件数と期間に上限がある。
+//!     アプリの接続中の扱い（通知をアプリに任せる）には数えない
+//!     - `{"cmd":"history","hours":168,"level":"notice","rule":"R1","q":"curl","before":<UNIX 秒>,"limit":200}`
+//!       → 警告の一覧（新しい順）と日ごとの件数
+//!     - `{"cmd":"event","id":"e_…"}` → イベント 1 件（JSON と通知の文）
+//!     - `{"cmd":"process","proc_key":"…","hours":168}` → プロセスの登録情報・相手ごとの通信・警告
+//!     - `{"cmd":"tree","hours":24,"min_level":"notice"}` → 親子のプロセスの木と、各プロセスの通信
 //! - 設定は変更できない（読み取り専用）。モード変更などは管理者認証つきの別経路で行う
 //! - 接続相手の uid を検証する：root・ログイン中のユーザー・`status_allowed_uids` のみ
 //! - アプリが接続している間（直近 15 秒以内に要求あり）は、OS ローカル通知をアプリに任せる
@@ -107,6 +114,121 @@ fn list_alerts(db: &Path, req: &serde_json::Value) -> Result<AlertList> {
         by_rule,
         truncated,
     })
+}
+
+/// 履歴ビューアの上限
+const MAX_HISTORY: i64 = 500;
+const MAX_TREE_ROWS: i64 = 200_000;
+const MAX_TREE_NODES: usize = 3000;
+const MAX_DESTS: i64 = 500;
+const MAX_HOURS_VIEW: i64 = 24 * 90;
+
+/// 要求の文字列（外から来る）。長さを切り、制御文字を含むものは捨てる
+fn req_str<'a>(req: &'a serde_json::Value, k: &str) -> Option<&'a str> {
+    let v = req.get(k)?.as_str()?.trim();
+    (!v.is_empty() && v.len() <= 200 && !v.chars().any(char::is_control)).then_some(v)
+}
+
+fn levels_from(min: &str) -> Vec<&'static str> {
+    match min {
+        "info" => vec!["info", "notice", "warn", "critical"],
+        "warn" => vec!["warn", "critical"],
+        "critical" => vec!["critical"],
+        _ => vec!["notice", "warn", "critical"],
+    }
+}
+
+/// 一覧の 1 行：警告の文に、プロセスと相手の要点を足したもの
+fn history_item(v: &serde_json::Value) -> Option<serde_json::Value> {
+    let a = alert_item_from_event(v)?;
+    let g = |p: &str| kanmon_core::event::get_path(v, p).cloned().unwrap_or(serde_json::Value::Null);
+    let mut o = serde_json::to_value(&a).ok()?;
+    let m = o.as_object_mut()?;
+    for (k, p) in [
+        ("pid", "process.pid"),
+        ("process", "process.name"),
+        ("executable", "process.executable"),
+        ("proc_key", "process.proc_key"),
+        ("domain", "destination.domain"),
+        ("ip", "destination.ip"),
+        ("port", "destination.port"),
+        ("net_type", "kanmon.net_type"),
+    ] {
+        m.insert(k.into(), g(p));
+    }
+    Some(o)
+}
+
+fn history(db: &Path, req: &serde_json::Value) -> Result<serde_json::Value> {
+    let hours = req.get("hours").and_then(|v| v.as_i64()).unwrap_or(24 * 7).clamp(1, MAX_HOURS_VIEW);
+    let limit = req.get("limit").and_then(|v| v.as_i64()).unwrap_or(200).clamp(1, MAX_HISTORY);
+    let min = req_str(req, "level").unwrap_or("notice");
+    let levels = levels_from(min);
+    let now = chrono::Utc::now().timestamp();
+    let since = now - hours * 3600;
+    // 次のページの目印 "ts:id"（前の応答の next_before をそのまま返してもらう）
+    let before = req_str(req, "before").and_then(|b| {
+        let (t, id) = b.split_once(':')?;
+        Some((t.parse::<i64>().ok()?, id))
+    });
+    let store = kanmon_core::store::Store::open_readonly(db)?;
+    let evs = store.history(since, before, &levels, req_str(req, "rule"), req_str(req, "q"), None, limit + 1)?;
+    let more = evs.len() as i64 > limit;
+    let items: Vec<serde_json::Value> = evs.iter().take(limit as usize).filter_map(|e| history_item(&e.1)).collect();
+    // 次のページの目印：この応答の最後の 1 件の (ts, id)
+    let next_before = if more {
+        evs.get(limit as usize - 1).and_then(|(ts, e)| {
+            let id = kanmon_core::event::get_path(e, "event.id")?.as_str()?;
+            Some(format!("{ts}:{id}"))
+        })
+    } else {
+        None
+    };
+    let days: Vec<serde_json::Value> = store
+        .daily_counts(since)?
+        .into_iter()
+        .map(|(d, l, n)| serde_json::json!({"day": d, "level": l, "count": n}))
+        .collect();
+    Ok(serde_json::json!({
+        "hours": hours, "level": min, "items": items, "more": more, "next_before": next_before, "days": days
+    }))
+}
+
+fn event_detail(db: &Path, req: &serde_json::Value) -> Result<serde_json::Value> {
+    let id = req_str(req, "id").context("id がありません")?;
+    let store = kanmon_core::store::Store::open_readonly(db)?;
+    let Some(v) = store.event_by_id(id)? else { anyhow::bail!("見つかりません") };
+    let (title, body) = kanmon_core::format::alert_text(&v);
+    Ok(serde_json::json!({"event": v, "title": title, "body": body}))
+}
+
+fn process_detail(db: &Path, req: &serde_json::Value) -> Result<serde_json::Value> {
+    let key = req_str(req, "proc_key").context("proc_key がありません")?;
+    let hours = req.get("hours").and_then(|v| v.as_i64()).unwrap_or(24 * 7).clamp(1, MAX_HOURS_VIEW);
+    let since = chrono::Utc::now().timestamp() - hours * 3600;
+    let store = kanmon_core::store::Store::open_readonly(db)?;
+    let info = store.process_row(key)?;
+    let dests = store.process_destinations(key, since, MAX_DESTS)?;
+    let alerts: Vec<serde_json::Value> = store
+        .history(since, None, &levels_from("notice"), None, None, Some(key), 100)?
+        .iter()
+        .filter_map(|e| history_item(&e.1))
+        .collect();
+    Ok(serde_json::json!({"hours": hours, "process": info, "destinations": dests, "alerts": alerts}))
+}
+
+fn tree(db: &Path, req: &serde_json::Value) -> Result<serde_json::Value> {
+    let hours = req.get("hours").and_then(|v| v.as_i64()).unwrap_or(24).clamp(1, 24 * 7);
+    let min = req_str(req, "min_level").unwrap_or("");
+    let min = if matches!(min, "notice" | "warn" | "critical") { min } else { "" };
+    let now = chrono::Utc::now().timestamp();
+    let store = kanmon_core::store::Store::open_readonly(db)?;
+    let (rows, cut) = store.tree_rows(now - hours * 3600, now + 1, MAX_TREE_ROWS)?;
+    let t = kanmon_core::history::build_tree(&rows, min, MAX_TREE_NODES, cut);
+    let mut v = serde_json::to_value(&t)?;
+    v["hours"] = hours.into();
+    v["min_level"] = min.into();
+    Ok(v)
 }
 
 /// 書き出しの上限（件数・ログの大きさ）
@@ -245,6 +367,19 @@ pub fn respond(req: &str, shared: &Shared) -> String {
             shared.touch_client();
             let Some(db) = &shared.db else { return r#"{"error":"no database"}"#.into() };
             match export(db, &parsed) {
+                Ok(v) => v.to_string(),
+                Err(e) => serde_json::json!({ "error": format!("{e:#}") }).to_string(),
+            }
+        }
+        Some(c @ ("history" | "event" | "process" | "tree")) => {
+            let Some(db) = &shared.db else { return r#"{"error":"no database"}"#.into() };
+            let r = match c {
+                "history" => history(db, &parsed),
+                "event" => event_detail(db, &parsed),
+                "process" => process_detail(db, &parsed),
+                _ => tree(db, &parsed),
+            };
+            match r {
                 Ok(v) => v.to_string(),
                 Err(e) => serde_json::json!({ "error": format!("{e:#}") }).to_string(),
             }
@@ -414,6 +549,65 @@ mod tests {
             assert!(fx.get(k).is_some() && v.get(k).is_some(), "{k}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn viewer_commands() {
+        let dir = std::env::temp_dir().join(format!("kanmon-status-view-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("kanmon.db");
+        let _ = std::fs::remove_file(&db);
+        let now = chrono::Utc::now().timestamp();
+        {
+            let st = kanmon_core::store::Store::open(&db).unwrap();
+            for i in 0..5 {
+                let lv = if i == 4 { "info" } else { "notice" };
+                let v = serde_json::json!({
+                    "@timestamp": "2026-11-27T10:00:00+09:00",
+                    "event": {"id": format!("e{i}")},
+                    "network": {"kind": "connect", "direction": "outbound", "transport": "tcp"},
+                    "process": {"pid": 4417 + i % 2, "name": format!("p{}", i % 2), "executable": "/x/p",
+                                "proc_key": format!("k{}", i % 2), "start": "2026-11-27T09:00:00+09:00",
+                                "ancestors": [{"pid": 70, "name": "zsh", "start": "s"}, {"pid": 1, "name": "launchd"}]},
+                    "destination": {"ip": "203.0.113.80", "port": 443},
+                    "kanmon": {"level": lv, "score": 30, "signals": [{"id": "R1", "points": 25}]}
+                });
+                st.insert_event(&v, now - 10).unwrap();
+            }
+        }
+        let sh = Shared::with_db(Snapshot::default(), Some(db.clone()));
+        let j = |r: &str| serde_json::from_str::<serde_json::Value>(&respond(r, &sh)).unwrap();
+        let h = j(r#"{"cmd":"history","limit":2}"#);
+        assert_eq!(h["items"].as_array().unwrap().len(), 2);
+        assert_eq!(h["items"][0]["id"], "e3", "新しい順（同じ秒は id の降順）");
+        assert_eq!(h["more"], true);
+        let nb = h["next_before"].as_str().unwrap().to_string();
+        let h2 = j(&serde_json::json!({"cmd":"history","limit":2,"before":nb}).to_string());
+        assert_eq!(h2["items"].as_array().unwrap().len(), 2);
+        assert_ne!(h2["items"][0]["id"], h["items"][0]["id"]);
+        assert_eq!(h["days"][0]["count"], 4);
+        assert!(!sh.app_active(), "ブラウザの要求はアプリ接続中に数えない");
+        // 制御文字を含む文字列は使わない（絞り込みなし扱い）
+        let h3 = j(&serde_json::json!({"cmd":"history","q":"a\u{0007}"}).to_string());
+        assert_eq!(h3["items"].as_array().unwrap().len(), 4);
+
+        let e = j(r#"{"cmd":"event","id":"e1"}"#);
+        assert_eq!(e["event"]["event"]["id"], "e1");
+        assert!(j(r#"{"cmd":"event","id":"nope"}"#)["error"].is_string());
+        assert!(j(r#"{"cmd":"event"}"#)["error"].is_string());
+
+        let p = j(r#"{"cmd":"process","proc_key":"k0"}"#);
+        assert_eq!(p["destinations"][0]["count"], 3);
+        assert_eq!(p["alerts"].as_array().unwrap().len(), 2, "info は警告に入れない");
+
+        let t = j(r#"{"cmd":"tree","hours":1}"#);
+        let nodes = t["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 4, "launchd・zsh・p0・p1");
+        let root = &nodes[t["roots"][0].as_u64().unwrap() as usize];
+        assert_eq!((root["name"].as_str(), root["worst"].as_str()), (Some("launchd"), Some("notice")));
+        let tn = j(r#"{"cmd":"tree","hours":1,"min_level":"warn"}"#);
+        assert_eq!(tn["nodes"].as_array().unwrap().len(), 0);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

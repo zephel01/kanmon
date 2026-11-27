@@ -17,6 +17,42 @@ pub struct ProcInfo {
     pub start: u64,
 }
 
+/// 開始時刻を UNIX 秒にする。macOS は proc_bsdinfo の秒そのもの、Linux は起動からのクロック刻みなので
+/// /proc/stat の btime と CLK_TCK で直す。0（取れなかった）は None
+pub fn start_epoch(start: u64) -> Option<i64> {
+    if start == 0 {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::sync::OnceLock;
+        static BOOT: OnceLock<Option<(i64, u64)>> = OnceLock::new();
+        let (btime, hz) = (*BOOT.get_or_init(|| {
+            let s = std::fs::read_to_string("/proc/stat").ok()?;
+            let bt = s.lines().find_map(|l| l.strip_prefix("btime "))?.trim().parse().ok()?;
+            let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+            Some((bt, if hz > 0 { hz as u64 } else { 100 }))
+        }))?;
+        Some(ticks_to_epoch(btime, start, hz))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Some(start as i64)
+    }
+}
+
+/// Linux：起動時刻（btime）＋ 刻み ÷ 1 秒あたりの刻み
+pub fn ticks_to_epoch(btime: i64, ticks: u64, hz: u64) -> i64 {
+    btime + (ticks / hz.max(1)) as i64
+}
+
+/// 開始時刻を RFC 3339（ローカル時刻、秒まで）にする
+pub fn start_rfc3339(start: u64) -> Option<String> {
+    use chrono::{Local, SecondsFormat};
+    let t = chrono::DateTime::from_timestamp(start_epoch(start)?, 0)?;
+    Some(t.with_timezone(&Local).to_rfc3339_opts(SecondsFormat::Secs, false))
+}
+
 pub fn basename(p: &str) -> String {
     p.rsplit('/').next().unwrap_or(p).to_string()
 }
@@ -197,6 +233,17 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    #[test]
+    fn start_conversion() {
+        assert_eq!(ticks_to_epoch(1_700_000_000, 12_345, 100), 1_700_000_123);
+        assert_eq!(start_epoch(0), None);
+        let me = read(std::process::id()).unwrap();
+        let t = start_epoch(me.start).unwrap();
+        let now = chrono::Utc::now().timestamp();
+        assert!(t <= now + 1 && t > now - 3600, "自分の開始時刻が直近 1 時間に入る: {t} / {now}");
+        assert!(start_rfc3339(me.start).is_some());
+    }
+
     #[test]
     fn reads_self() {
         let p = read(std::process::id()).unwrap();

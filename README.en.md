@@ -45,6 +45,7 @@ It then alerts you on suspicious traffic and **explains why** it flagged it. Det
 - 📡 **Beacon detection**: statistical periodicity scoring catches C2 check-ins, including ones relayed through legitimate cloud services
 - 🛡️ **Threat intel**: matches against Feodo Tracker, Spamhaus DROP and your own blocklists
 - 🖥️ **Menu bar app (macOS)**: a shield icon whose color shows the state (green = OK, yellow = notice, red = alert, gray = daemon down). Click the counts to open a per-level list you can filter by rule. Alerts open in a detail window with the full text
+- 🌐 **History in the browser**: `kanmonctl web` (or "ブラウザ" in the macOS menu) shows the alert history (filter by period, level, rule or text, with daily counts), each process's destinations, and the process "connections" tree (which parent started it and where it connected). It listens on 127.0.0.1 of this machine only and is read-only
 - 🔒 **Hardened**: refuses rule files that are not owned by root, passes notification text as arguments so it cannot be injected, and supports an external dead-man heartbeat
 
 ## Quick start
@@ -149,6 +150,18 @@ kanmonctl inspect npm:keyv@6.0.0 --detections /usr/local/etc/kanmon/detections
 kanmonctl inspect --file ./pkg-1.1.whl --base-file ./pkg-1.0.whl --detections …   # local files, no network
 ```
 It downloads the given version and the previous one from the registry (PyPI or npm), verifies their hashes, and reads only what was added. Exit code is 2 for warn and 3 for critical, so it can gate CI or an update. A single trait scores low; combinations such as "runs automatically + sends somewhere" score high. Details (Japanese): [docs/inspect.md](docs/inspect.md).
+
+## View history in the browser
+```bash
+kanmonctl web            # opens your browser; Ctrl-C to stop (no sudo needed)
+kanmonctl web --no-open  # print the URL only
+```
+On macOS you can also use "ブラウザ" in the menu bar app (it stops by itself after 30 idle minutes). There are three views:
+- History: the alert list with daily counts. Click a row for the reasons, process, parents, destination (AS, country, network type) and the raw JSON
+- Process: everything one executable connected to, most frequent first
+- Connections: the parent/child process tree with each process's connections, listeners and accepted connections hung under it. A parent row shows the most severe alert level found below it
+
+It listens on 127.0.0.1 of this machine only and needs a token created at each start (the Host header is checked too). Nothing is loaded from external sites. Data comes from kanmond's status socket, so only users the socket allows (root and the logged-in user) can see it. kanmon records only processes that used the network, so others appear only by name as ancestors.
 
 ## Share logs (articles, issues)
 On macOS, the menu bar's "書き出す…" (Export…) writes out events with IP addresses, host names, user names, home paths and command arguments masked. Pick the period, level and how to treat domains, check the preview, then copy the Markdown summary table or save the masked log. Masking happens inside kanmond, so the app never receives the raw values.

@@ -172,6 +172,12 @@ pub struct Process {
     /// 親から上へ向かう実行ファイル名（basename）の列
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parent_chain: Vec<String>,
+    /// プロセスの開始時刻（RFC 3339、ECS `process.start`）。pid の使い回しを見分ける（v0.5.7）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    /// 親から上へ向かう祖先（pid・名前・開始時刻）。ブラウザの「つながり」で親子の木を組むのに使う（v0.5.7）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ancestors: Vec<Ancestor>,
     #[serde(default)]
     pub exe_deleted: bool,
     #[serde(default)]
@@ -221,6 +227,19 @@ pub struct Parent {
     pub executable: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// 親の開始時刻（RFC 3339、v0.5.7）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+}
+
+/// 祖先の 1 段（`process.ancestors`）
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Ancestor {
+    pub pid: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
