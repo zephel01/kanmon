@@ -324,6 +324,9 @@ pub struct KanmonInfo {
     /// 待受がベースラインに無い
     #[serde(default)]
     pub listen_new: bool,
+    /// kanmon 自身の履歴ビューア（root が持つ所に入れた kanmonctl の、ループバックでの待受）。v0.5.8
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own_viewer: bool,
     /// 学習期間中か
     #[serde(default)]
     pub learning: bool,

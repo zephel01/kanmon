@@ -11,6 +11,8 @@ detections:
         - { field: process.code_signature.status, op: in, value: [unsigned, adhoc, unmanaged] }
         # snap / flatpak は dpkg 管理外だが配布元の署名がある
         - not: { field: process.executable, op: prefix, value: [/snap/, /var/lib/flatpak/, /app/] }
+        # kanmon 自身の履歴ビューア（root だけが書ける所の kanmonctl の、ループバックでの待受）は数えない
+        - not: { field: kanmon.own_viewer, op: eq, value: true }
 
   - id: S2b
     name: invalid_signature
@@ -37,6 +39,7 @@ detections:
       all:
         - { field: process.file_age_s, op: lt, value: 86400 }
         - { field: process.code_signature.status, op: not_in, value: [apple, package] }
+        - not: { field: kanmon.own_viewer, op: eq, value: true }
 
   - id: S4
     name: temp_dir_exec

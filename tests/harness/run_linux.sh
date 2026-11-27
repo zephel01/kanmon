@@ -100,7 +100,11 @@ PY
 
 "$KANMOND" --config "$W/etc/kanmon.toml" 2> "$W/kanmond.log" &
 D=$!
-cleanup() { kill $D $NTFY 2>/dev/null || true; }
+cleanup() {
+  kill $D $NTFY 2>/dev/null || true
+  # ケース X が途中で止まったときに、入れた kanmonctl を残さない
+  if [ "${X_INSTALLED:-0}" = 1 ]; then rm -f /usr/local/bin/kanmonctl; fi
+}
 trap cleanup EXIT
 sleep 2   # 初回スナップショット（既存の通信）
 
@@ -274,7 +278,7 @@ PY
 echo "[W] ブラウザの履歴ビューア（kanmonctl web）：トークン・Host の検査と、つながりの木"
 "$KANMONCTL" web --no-open --port 18099 --socket "$W/kanmond.sock" --idle-exit 30 > "$W/web.out" 2>&1 &
 WB=$!
-for i in $(seq 1 25); do grep -q '?t=' "$W/web.out" 2>/dev/null && break; sleep 0.2; done
+for _ in $(seq 1 25); do grep -q '?t=' "$W/web.out" 2>/dev/null && break; sleep 0.2; done
 TOK=$(grep -o 't=[0-9a-f]*' "$W/web.out" | head -1 | cut -c3-)
 WU="http://127.0.0.1:18099"
 {
@@ -288,6 +292,22 @@ curl -s -H "X-Kanmon-Token: $TOK" "$WU/api/tree?hours=1" > "$W/web-tree.json"
 curl -s -H "X-Kanmon-Token: $TOK" "$WU/api/history?hours=1&level=info&q=curl" > "$W/web-history.json"
 curl -s -D "$W/web-headers.txt" -o /dev/null "$WU/app.js"
 kill $WB 2>/dev/null; wait $WB 2>/dev/null || true
+
+echo "[X] kanmon 自身の履歴ビューア：/usr/local/bin/kanmonctl（root だけが書ける）のループバック待受は S2・S3 にしない"
+if [ ! -e /usr/local/bin/kanmonctl ]; then
+  install -m 0755 "$KANMONCTL" /usr/local/bin/kanmonctl
+  X_INSTALLED=1
+  /usr/local/bin/kanmonctl web --no-open --port 18097 --socket "$W/kanmond.sock" --idle-exit 30 > "$W/web-own.out" 2>&1 &
+  WX=$!
+  # 比べる相手：決まった場所以外（ビルドした場所）の kanmonctl
+  "$KANMONCTL" web --no-open --port 18096 --socket "$W/kanmond.sock" --idle-exit 30 > "$W/web-other.out" 2>&1 &
+  WY=$!; sleep 2.5
+  kill $WX $WY 2>/dev/null; wait $WX $WY 2>/dev/null || true
+  rm -f /usr/local/bin/kanmonctl
+  echo installed > "$W/x-ran.txt"
+else
+  echo "（/usr/local/bin/kanmonctl が既にあるので X は飛ばす）"
+fi
 
 kill $D; wait $D 2>/dev/null || true
 sleep 0.5
@@ -458,6 +478,13 @@ except Exception:
     wh = {}
 check("W: 履歴の一覧を文字列で絞れる", any(i.get("process") == "curl" for i in wh.get("items", [])))
 check("W: 画面の部品に CSP と nosniff が付く", "content-security-policy: default-src 'none'" in open(wd("web-headers.txt")).read().lower())
+if os.path.exists(wd("x-ran.txt")):
+    xo = [e for e in find(lambda e: e["network"]["kind"] == "listen") if e["process"].get("executable") == "/usr/local/bin/kanmonctl" and e.get("source", {}).get("port") == 18097]
+    check("X: /usr/local/bin/kanmonctl の待受は own_viewer で S2・S3 なし",
+          bool(xo) and xo[0]["kanmon"].get("own_viewer") is True and not ({"S2", "S3"} & set(sig(xo[0]))))
+    xw = [e for e in find(lambda e: e["network"]["kind"] == "listen") if e.get("source", {}).get("port") == 18096]
+    check("X: 決まった場所以外の kanmonctl の待受は own_viewer でなく S2 が付く",
+          bool(xw) and not xw[0]["kanmon"].get("own_viewer") and "S2" in sig(xw[0]))
 print("RESULT:", "OK" if ok else "NG")
 sys.exit(0 if ok else 1)
 PY

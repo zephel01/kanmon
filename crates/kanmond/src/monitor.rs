@@ -663,6 +663,8 @@ impl Monitor {
                 let item = format!("{}/{}/{}", s.proto.as_str(), s.local.port(), scope);
                 let first = self.store.baseline_touch(&proc_key, &item, "listen", now_s)?;
                 e.kanmon.listen_new = first && !learning && !initial;
+                e.kanmon.own_viewer = scope == "loopback"
+                    && e.process.executable.as_deref().is_some_and(crate::identity::is_own_viewer_binary);
             }
             _ => {}
         }

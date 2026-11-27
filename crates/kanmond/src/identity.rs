@@ -292,6 +292,35 @@ pub fn proc_key(id: &Identity, exe: Option<&str>, script: Option<&str>) -> Strin
     }
 }
 
+/// kanmon 自身の kanmonctl として扱う場所（導入スクリプトと deb/rpm が入れる所）
+pub const OWN_VIEWER_PATHS: [&str; 2] = ["/usr/local/bin/kanmonctl", "/usr/bin/kanmonctl"];
+
+/// 決まった場所の kanmonctl で、ファイルも置き場所も root だけが書き換えられるか（v0.5.8）。
+/// 利用者が書ける所なら、別のものに差し替えられるので kanmon 自身とはみなさない
+pub fn is_own_viewer_binary(exe: &str) -> bool {
+    if !OWN_VIEWER_PATHS.contains(&exe) {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let path = std::path::Path::new(exe);
+        let (Ok(f), Some(Ok(d))) = (std::fs::symlink_metadata(path), path.parent().map(std::fs::metadata)) else {
+            return false;
+        };
+        f.file_type().is_file() && root_only_writable(f.uid(), f.mode()) && root_only_writable(d.uid(), d.mode())
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+/// 持ち主が root で、グループとその他に書き込みが無い
+pub fn root_only_writable(uid: u32, mode: u32) -> bool {
+    uid == 0 && mode & 0o022 == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +400,15 @@ file modified: /Applications/X.app/Contents/Resources/en.lproj/InfoPlist.strings
         }
         assert!(!resources_only_change("/Applications/X.app: code object is not signed at all"));
         assert!(!resources_only_change("/Applications/X.app: a sealed resource is missing or invalid\n"));
+    }
+
+    #[test]
+    fn own_viewer_needs_fixed_path_and_root_only_write() {
+        assert!(root_only_writable(0, 0o100755));
+        assert!(!root_only_writable(501, 0o100755), "利用者が持つファイル");
+        assert!(!root_only_writable(0, 0o100775), "グループが書ける");
+        assert!(!root_only_writable(0, 0o040777), "誰でも書ける置き場所");
+        assert!(!is_own_viewer_binary("/tmp/kanmonctl"), "決まった場所以外");
+        assert!(!is_own_viewer_binary("/home/x/kanmon/target/release/kanmonctl"));
     }
 }

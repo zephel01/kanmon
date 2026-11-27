@@ -60,6 +60,7 @@ detections:
 | `process.code_signature.team_id` / `signing_id` / `package` | 署名者、パッケージ名 |
 | `process.hash.sha256` / `proc_key` | ハッシュ、安定識別キー |
 | `process.start` / `process.parent.start` | 開始時刻（RFC 3339）。pid の使い回しを見分ける（v0.5.7） |
+| `kanmon.own_viewer` | kanmon 自身の履歴ビューア（`/usr/local/bin/kanmonctl` か `/usr/bin/kanmonctl` で、ファイルも置き場所も root だけが書ける）のループバックでの待受なら true。S2・S3 を付けない（v0.5.8） |
 | `process.ancestors` | 親から上へ最大 6 段の祖先（`pid`・`name`・`start`）。ブラウザの「つながり」で親子の木を組むのに使う（v0.5.7） |
 | `process.parent.name` / `parent_chain` | 親プロセス、親から上へ最大 6 段の実行ファイル名。インタプリタはスクリプト名も入る（`node …/npm-cli.js` → `node`・`npm-cli.js`、`python -m pip` → `pip`） |
 | `process.exe_deleted` / `memfd` / `hidden` / `interpreter` / `script` | 削除済み、メモリ上（memfd）、隠しファイル、インタプリタとスクリプト |
