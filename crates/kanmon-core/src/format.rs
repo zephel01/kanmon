@@ -231,11 +231,11 @@ pub fn alert_text(v: &Value) -> (String, String) {
     let target = match kind {
         "beacon_report" => s(v, "destination.domain").or_else(|| s(v, "kanmon.dest_key")).unwrap_or("?").to_string(),
         "bytes_report" => s(v, "destination.domain").or_else(|| s(v, "destination.ip")).unwrap_or("?").to_string(),
-        "listen" | "raw_socket" => format!(
-            "{}:{}",
-            s(v, "source.ip").unwrap_or("?"),
-            get_path(v, "source.port").map(|x| x.to_string()).unwrap_or_default()
-        ),
+        "listen" | "raw_socket" => {
+            let ip = s(v, "source.ip").unwrap_or("?");
+            let ip = if ip.contains(':') { format!("[{ip}]") } else { ip.to_string() };
+            format!("{ip}:{}", get_path(v, "source.port").map(|x| x.to_string()).unwrap_or_default())
+        }
         _ => {
             let host = s(v, "destination.domain").or_else(|| s(v, "destination.ip")).unwrap_or("?");
             let port = get_path(v, "destination.port").map(|x| x.to_string()).unwrap_or_default();
@@ -243,7 +243,13 @@ pub fn alert_text(v: &Value) -> (String, String) {
             format!("{h}:{port}")
         }
     };
-    let arrow = if kind == "accept" { "←" } else { "→" };
+    // 待受・raw ソケットは相手がいないので矢印にしない（外へつないだように読めるため。v0.5.8）
+    let arrow = match kind {
+        "accept" => "←",
+        "listen" => "◎ 待受",
+        "raw_socket" => "◎ raw",
+        _ => "→",
+    };
     let title = format!("kanmon {} {}点: {} {} {}", level.to_uppercase(), score, basename(exe), arrow, target);
 
     let mut lines = vec![];
@@ -281,7 +287,11 @@ pub fn alert_text(v: &Value) -> (String, String) {
         ));
     }
     lines.push(String::new());
-    lines.push(format!("【通信】{}  {} {}", kind_label(kind), arrow, target));
+    if matches!(kind, "listen" | "raw_socket") {
+        lines.push(format!("【通信】{}  {}", kind_label(kind), target));
+    } else {
+        lines.push(format!("【通信】{}  {} {}", kind_label(kind), arrow, target));
+    }
     if let Some(sc) = s(v, "network.scope") {
         lines.push(format!("  範囲: {sc}  / {}", s(v, "network.transport").unwrap_or("")));
     }
@@ -446,5 +456,18 @@ mod tests {
                          "kanmon": {"level": "warn", "score": 70,
                                     "dns": {"finding": "crosscheck_mismatch", "tls": ["203.0.113.5: 証明書の検証に失敗（x）"]}}});
         assert!(alert_text(&new).0.contains("正しい証明書を出さない"));
+    }
+
+    #[test]
+    fn listen_title_has_no_arrow() {
+        let v = serde_json::json!({
+            "network": {"kind": "listen", "scope": "all"},
+            "process": {"executable": "/Applications/Elgato Stream Deck.app/Contents/MacOS/Stream Deck"},
+            "source": {"ip": "::", "port": 8888},
+            "kanmon": {"level": "notice", "score": 30, "signals": []}
+        });
+        let (t, b) = alert_text(&v);
+        assert_eq!(t, "kanmon NOTICE 30点: Stream Deck ◎ 待受 [::]:8888");
+        assert!(b.contains("【通信】待受  [::]:8888"), "{b}");
     }
 }

@@ -62,6 +62,8 @@
     const d = h("div", { class: "kv" });
     for (const [k, v] of pairs) {
       if (v == null || v === "" || (Array.isArray(v) && !v.length)) continue;
+      // 中身の無い要素（相手のいない待受の「相手」など）は行ごと出さない
+      if (v instanceof Node && !v.textContent.trim()) continue;
       add(d, h("div", { text: k }));
       add(d, h("div", null, v));
     }
