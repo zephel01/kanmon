@@ -295,6 +295,20 @@ python3 -c 'import socket; s=socket.socket(); s.connect(("127.0.0.1", 18090)); s
 sleep 1.5
 kill $D; wait $D 2>/dev/null || true
 
+echo "[V] 日付ごとの切り替えと gzip：前の日のまま残った events-d.jsonl を起動時に .gz にし、alerts・replay で読める"
+Y=$(date -d yesterday +%F)
+echo "$Y" > "$W/v-date.txt"
+grep -m1 '"level":"critical"' "$W/events.jsonl" > "$W/events-d.jsonl"
+touch -d "$Y 12:00" "$W/events-d.jsonl"
+sed -e "s#^path = \"$W/events.jsonl\"#path = \"$W/events-d.jsonl\"#" "$W/etc/kanmon.toml" > "$W/etc/kanmon-d.toml"
+chmod 0644 "$W/etc/kanmon-d.toml"
+"$KANMOND" --config "$W/etc/kanmon-d.toml" 2>> "$W/kanmond.log" &
+D=$!; sleep 2
+kill $D; wait $D 2>/dev/null || true
+"$KANMONCTL" alerts --file "$W/events-d.jsonl" --hours 48 --min-level critical > "$W/alerts-d.txt" 2>&1 || true
+"$KANMONCTL" replay --events "$W/events-d.$Y.jsonl.gz" --detections "$W/etc/detections" --min-level info --json \
+  > "$W/replay-d.jsonl" 2>&1 || true
+
 echo
 echo "==== kanmonctl tail（notice 以上）"
 "$KANMONCTL" tail --file "$W/events.jsonl" --min-level notice --lines 200
@@ -399,6 +413,15 @@ check("O: .pth の追加に P3+P3u、warn、読み込むモジュール名", p3 
       and p3[0]["kanmon"]["persist"].get("module") == "harness_meta")
 c1 = find(lambda e: e["network"]["kind"] == "connect" and e.get("destination",{}).get("ip") == "203.0.113.70")
 check("O: .pth の追加後、python の初めての宛先に C1", c1 and "C1" in sig(c1[0]) and "pth_exec" in c1[0]["kanmon"].get("persist_recent", []))
+import os, stat
+vd = open(sys.argv[1].replace("events.jsonl", "v-date.txt")).read().strip()
+vgz = sys.argv[1].replace("events.jsonl", f"events-d.{vd}.jsonl.gz")
+check("V: 前の日の events-d.jsonl が起動時に .gz になり、元のファイルは残らない",
+      os.path.exists(vgz) and not os.path.exists(vgz[:-3]) and stat.S_IMODE(os.stat(vgz).st_mode) == 0o640)
+va = open(sys.argv[1].replace("events.jsonl", "alerts-d.txt")).read()
+check("V: kanmonctl alerts が .gz の中の critical を読む", "critical 以上: 1 件" in va)
+vr = [l for l in open(sys.argv[1].replace("events.jsonl", "replay-d.jsonl")) if l.strip().startswith("{")]
+check("V: kanmonctl replay が .gz を読む", len(vr) >= 1)
 print("RESULT:", "OK" if ok else "NG")
 sys.exit(0 if ok else 1)
 PY

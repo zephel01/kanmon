@@ -272,9 +272,8 @@ fn main() -> Result<()> {
             let reader: Box<dyn BufRead> = if events.as_os_str() == "-" {
                 Box::new(BufReader::new(std::io::stdin()))
             } else {
-                Box::new(BufReader::new(
-                    std::fs::File::open(&events).with_context(|| format!("open {}", events.display()))?,
-                ))
+                // .gz（圧縮済みの日付ごとのファイル）は展開しながら読む
+                kanmon_core::rotate::open_reader(&events).with_context(|| format!("open {}", events.display()))?
             };
             let mut total = 0usize;
             let mut bad = 0usize;
@@ -370,17 +369,30 @@ fn main() -> Result<()> {
         Cmd::Alerts { file, hours, min_level, limit } => {
             let min = Level::parse(&min_level).context("min-level は info/notice/warn/critical")?;
             let since = chrono::Utc::now() - chrono::Duration::hours(hours);
-            // ローテーション済み（.1）も含めて読む
-            let mut paths = vec![file.with_extension("jsonl.1"), file.clone()];
-            paths.retain(|p| p.exists());
+            // 切り替え済みのファイルも含めて読む：日付ごと（.gz を含む。期間に入る日付のもの）とサイズごと（.N）
+            let since_day = since.with_timezone(&chrono::Local).date_naive();
+            let paths = kanmon_core::rotate::files_since(&file, since_day);
             if paths.is_empty() {
                 anyhow::bail!("{} がありません", file.display());
             }
             let mut found: Vec<Value> = vec![];
             for p in paths {
-                let text = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
-                for line in text.lines() {
-                    let Ok(mut v) = serde_json::from_str::<Value>(line) else { continue };
+                // 読む直前に裏で圧縮された場合は .gz の方を読む
+                let r = match kanmon_core::rotate::open_reader(&p) {
+                    Ok(r) => r,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        let mut gz = p.clone().into_os_string();
+                        gz.push(".gz");
+                        match kanmon_core::rotate::open_reader(std::path::Path::new(&gz)) {
+                            Ok(r) => r,
+                            Err(_) => continue,
+                        }
+                    }
+                    Err(e) => return Err(e).with_context(|| format!("open {}", p.display())),
+                };
+                for line in r.lines() {
+                    let Ok(line) = line else { break };
+                    let Ok(mut v) = serde_json::from_str::<Value>(&line) else { continue };
                     kanmon_core::event::migrate_legacy(&mut v);
                     let lv = Level::parse(s(&v, "kanmon.level")).unwrap_or(Level::Info);
                     let ts = chrono::DateTime::parse_from_rfc3339(s(&v, "@timestamp")).ok();

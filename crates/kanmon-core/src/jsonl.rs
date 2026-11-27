@@ -1,7 +1,7 @@
 //! JSONL 追記。切り替えは 2 通り：
-//! - サイズごと（既定）：events.jsonl → events.jsonl.1 → … → .N
-//! - 日付ごと（`daily`）：日付が変わったら events.YYYY-MM-DD.jsonl に名前を変え、残す日数を過ぎたら消す。
-//!   同じ日にサイズの上限を超えたら events.YYYY-MM-DD.1.jsonl …
+//! - 日付ごと（`daily`、既定）：日付が変わったら events.YYYY-MM-DD.jsonl に名前を変え、残す日数を過ぎたら消す。
+//!   同じ日にサイズの上限を超えたら events.YYYY-MM-DD.1.jsonl …。`compress` なら切り替えた分を .gz にする
+//! - サイズごと（`size`）：events.jsonl → events.jsonl.1 → … → .N（圧縮しない）
 
 use anyhow::Result;
 use std::fs::{File, OpenOptions};
@@ -38,10 +38,10 @@ impl JsonlWriter {
         Ok(Self { daily: None, path: path.to_path_buf(), max_bytes, keep: keep.max(1), file, size })
     }
 
-    /// 日付ごとに切り替える。`keep_days` 日より前のものは消す
-    pub fn open_daily(path: &Path, max_bytes: u64, keep_days: u32) -> Result<Self> {
+    /// 日付ごとに切り替える。`keep_days` 日より前のものは消す。`compress` なら切り替えた分を gzip にする
+    pub fn open_daily(path: &Path, max_bytes: u64, keep_days: u32, compress: bool) -> Result<Self> {
         let today = chrono::Local::now().date_naive();
-        let daily = crate::rotate::DailyFile::open(path, keep_days, max_bytes, today)?;
+        let daily = crate::rotate::DailyFile::open(path, keep_days, max_bytes, compress, today)?;
         let file = open(path)?;
         Ok(Self { daily: Some(daily), path: path.to_path_buf(), max_bytes, keep: 1, file, size: 0 })
     }

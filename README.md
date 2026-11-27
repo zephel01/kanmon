@@ -63,6 +63,8 @@ sudo packaging/install-linux.sh
 ```
 更新するときも同じく `git pull` → `cargo build --release` → 導入スクリプトの順です。導入スクリプトは、ビルドした実行ファイルの版がリポジトリの版と違えば止まります（古いものを入れないため）。
 
+設定ファイルは更新で上書きしません。v0.5.6 からログの既定は「日付ごとに 14 日、前の日は gzip」ですが、v0.5.5 までに入れた環境では設定に `rotate = "size"` が残っています。日付ごとにするには、設定（macOS は `/Library/Application Support/kanmon/etc/kanmon.toml`、Linux は `/etc/kanmon/kanmon.toml`）の `[jsonl]` を `rotate = "daily"`・`keep_days = 14` に変え、kanmond を再起動します。
+
 **Linux のパッケージ（.deb・.rpm）**
 [リリース](https://github.com/zephel01/kanmon/releases)から取って入れます。自動では起動しないので、設定を見てから有効にします。
 ```bash

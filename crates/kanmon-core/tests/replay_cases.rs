@@ -70,3 +70,20 @@ fn bundled_detections_match_fixtures() {
     }
     assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
+
+/// AS の一覧（クラウド・CDN・住宅用）は数字だけで、互いに重ならない（重なると回線の種類が一覧の順で決まってしまう）
+#[test]
+fn asn_lists_are_numeric_and_disjoint() {
+    let d = DetectionSet::load_dir(&root().join("detections"), false).expect("detections/");
+    let mut seen = std::collections::HashMap::new();
+    for name in ["cloud_asns", "cdn_asns", "residential_asns"] {
+        let list = d.list(name);
+        assert!(!list.is_empty(), "{name} が空");
+        for a in list {
+            assert!(a.parse::<u32>().is_ok(), "{name} に数字でない AS: {a}");
+            if let Some(prev) = seen.insert(a.clone(), name) {
+                panic!("AS {a} が {prev} と {name} の両方にある");
+            }
+        }
+    }
+}

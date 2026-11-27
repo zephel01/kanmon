@@ -147,7 +147,12 @@ impl Monitor {
         logln!("検知ルール {} 件を読み込み（{}）", dets.detections.len(), cfg.detections_dir.display());
         let rules = load_rules(&cfg, strict)?;
         let jsonl = if cfg.jsonl.rotate == "daily" {
-            JsonlWriter::open_daily(&cfg.jsonl.path, cfg.jsonl.max_mb * 1024 * 1024, cfg.jsonl.keep_days)?
+            JsonlWriter::open_daily(
+                &cfg.jsonl.path,
+                cfg.jsonl.max_mb * 1024 * 1024,
+                cfg.jsonl.keep_days,
+                cfg.jsonl.compress,
+            )?
         } else {
             JsonlWriter::open(&cfg.jsonl.path, cfg.jsonl.max_mb * 1024 * 1024, cfg.jsonl.keep)?
         };

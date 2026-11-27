@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-11-27
+### 変更
+- ログ（`events.jsonl`）の既定を、サイズごと 5 本（50MB × 5、Mac の実機で約 3.5 日分）から、日付ごと 14 日分に変えた（`[jsonl] rotate = "daily"`・`keep_days = 14`）
+- 新しい設定 `[jsonl] compress`・`[log] compress`（既定 true）：日付が変わったら前の日のファイルを裏で gzip にする（`events.YYYY-MM-DD.jsonl.gz`・`kanmond.YYYY-MM-DD.log.gz`）。`.gz.tmp` に書き終えてから名前を変え、その後で元を消すので、途中で止まっても中身は失われない。起動時に圧縮されずに残った分も圧縮する。テストの JSONL では元の 8% 前後になった
+- `kanmonctl alerts` は、期間に入る日付ごとのファイル（`.gz` を含む）とサイズごとの `.N` を読む。`kanmonctl replay --events` は `.gz` をそのまま読む
+- `[jsonl] rotate` に daily・size 以外を書くと起動時にエラーにする
+- 住宅用回線の AS（`residential_asns`）を 19 件から 56 件に広げた（国内のコミュファ・QTnet・楽天モバイル等、海外の家庭向けが主の回線事業者）。中継網と混ざる大手の幹線 AS は入れていない。R1・R2・A5 と、N2p の除外（`unknown_public_isp`）に効く。AS の一覧どうしが重ならないことをテストで確かめる
+
+### 注意
+- 既にある設定ファイルは書き換えない。v0.5.5 までに入れた環境は `rotate = "size"` が書かれたままなので、日付ごとにするには設定を変える（README の「更新」を参照）。size から切り替えた後に残る `events.jsonl.1` … は消さないので、不要になったら手で消す
+
 ## [0.5.5] - 2026-11-25
 Mac の実機の 1 週間分のログの精査（notice 以上 305 件）で見つかった誤検知を直した。
 

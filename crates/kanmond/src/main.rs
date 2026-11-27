@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
     let a = Args::parse();
     let cfg = config::Config::load(a.config.as_deref())?;
     if !cfg.log.path.as_os_str().is_empty() {
-        if let Err(e) = logfile::init(&cfg.log.path, cfg.log.keep_days) {
+        if let Err(e) = logfile::init(&cfg.log.path, cfg.log.keep_days, cfg.log.compress) {
             eprintln!("kanmond: ログファイル {} を開けません（標準エラーに出します）: {e}", cfg.log.path.display());
         }
     }

@@ -641,11 +641,12 @@ dependencies = [
 
 [[package]]
 name = "kanmon-core"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "base64",
  "chrono",
+ "flate2",
  "ipnet",
  "psl",
  "regex",
@@ -658,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "kanmonctl"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "base64",
@@ -679,7 +680,7 @@ dependencies = [
 
 [[package]]
 name = "kanmond"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "anyhow",
  "chrono",

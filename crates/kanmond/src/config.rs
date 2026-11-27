@@ -234,10 +234,12 @@ pub struct JsonlCfg {
     pub path: PathBuf,
     pub max_mb: u64,
     pub keep: usize,
-    /// "size"（サイズごと：events.jsonl.1 …）/ "daily"（日付ごと：events.YYYY-MM-DD.jsonl）
+    /// "daily"（日付ごと：events.YYYY-MM-DD.jsonl、既定）/ "size"（サイズごと：events.jsonl.1 …）
     pub rotate: String,
     /// daily のときに残す日数
     pub keep_days: u32,
+    /// daily のとき、切り替えた前の日のファイルを gzip にする（events.YYYY-MM-DD.jsonl.gz）。size では使わない
+    pub compress: bool,
     /// events.jsonl に書く最低のレベル（info / notice / warn / critical）。既定は info（全部）。
     /// notice にすると記録だけの接続は書かない。SQLite（保存期間ぶん）には全部残り、ベースラインと alerts は変わらない。
     /// ただし `kanmonctl replay` は JSONL を読むので、新しいルールを試せるのは書いたイベントだけになる
@@ -251,6 +253,8 @@ pub struct LogCfg {
     pub path: PathBuf,
     /// 日付ごとのファイルを残す日数
     pub keep_days: u32,
+    /// 切り替えた前の日のファイルを gzip にする（kanmond.YYYY-MM-DD.log.gz）
+    pub compress: bool,
 }
 
 impl Default for LogCfg {
@@ -258,6 +262,7 @@ impl Default for LogCfg {
         Self {
             path: if cfg!(target_os = "macos") { default_base().2.join("kanmond.log") } else { PathBuf::new() },
             keep_days: 14,
+            compress: true,
         }
     }
 }
@@ -341,8 +346,9 @@ impl Default for JsonlCfg {
             path: default_base().2.join("events.jsonl"),
             max_mb: 50,
             keep: 5,
-            rotate: "size".into(),
-            keep_days: 30,
+            rotate: "daily".into(),
+            keep_days: 14,
+            compress: true,
             min_level: "info".into(),
         }
     }
@@ -454,6 +460,9 @@ impl Config {
                 if kanmon_core::scoring::Level::parse(&c.jsonl.min_level).is_none() {
                     anyhow::bail!("jsonl.min_level は info / notice / warn / critical のどれかにしてください");
                 }
+                if !matches!(c.jsonl.rotate.as_str(), "daily" | "size") {
+                    anyhow::bail!("jsonl.rotate は daily / size のどちらかにしてください");
+                }
                 if c.asn.enabled && c.asn.file.is_none() && !c.asn.url.starts_with("https://") {
                     anyhow::bail!("asn.url は https:// で始めてください");
                 }
@@ -475,6 +484,23 @@ mod tests {
         assert_eq!(c.thresholds.warn, 60);
         assert!(!c.feeds.is_empty());
         assert_eq!(c.jsonl.min_level, "info");
+        assert_eq!((c.jsonl.rotate.as_str(), c.jsonl.keep_days, c.jsonl.compress), ("daily", 14, true));
+    }
+
+    #[test]
+    fn jsonl_rotate_defaults_and_check() {
+        let d = Config::default();
+        assert_eq!((d.jsonl.rotate.as_str(), d.jsonl.keep_days, d.jsonl.compress), ("daily", 14, true));
+        assert!(d.log.compress);
+        let dir = std::env::temp_dir().join(format!("kanmon-cfg-rot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("k.toml");
+        std::fs::write(&p, "[jsonl]\nrotate = \"size\"\ncompress = false\n").unwrap();
+        let c = Config::load(Some(&p)).unwrap();
+        assert_eq!((c.jsonl.rotate.as_str(), c.jsonl.compress), ("size", false));
+        std::fs::write(&p, "[jsonl]\nrotate = \"weekly\"\n").unwrap();
+        assert!(Config::load(Some(&p)).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
